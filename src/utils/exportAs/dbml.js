@@ -108,28 +108,37 @@ function processType(type) {
 }
 
 export function toDBML(diagram) {
-  const columnRef = (tableName, fieldNames) => {
+  // Schema groups round-trip as DBML's `schema.table` qualification. Ungrouped
+  // tables (schemaId null, or the implicit "public") are emitted bare.
+  const schemaNameById = Object.fromEntries(
+    (diagram.schemas ?? []).map((s) => [s.id, s.name]),
+  );
+  const qualifiedName = (table) => {
+    const schemaName = table.schemaId ? schemaNameById[table.schemaId] : null;
+    return schemaName
+      ? `${quoteIdentifier(schemaName)}.${quoteIdentifier(table.name)}`
+      : quoteIdentifier(table.name);
+  };
+
+  const columnRef = (table, fieldNames) => {
     const cols = fieldNames.map((n) => quoteIdentifier(n));
     const colPart = cols.length === 1 ? cols[0] : `(${cols.join(", ")})`;
-    return `${quoteIdentifier(tableName)}.${colPart}`;
+    return `${qualifiedName(table)}.${colPart}`;
   };
 
   const generateRelString = (rel) => {
-    const { fields: startTableFields, name: startTableName } =
-      diagram.tables.find((t) => t.id === rel.startTableId);
-    const { fields: endTableFields, name: endTableName } = diagram.tables.find(
-      (t) => t.id === rel.endTableId,
-    );
+    const startTable = diagram.tables.find((t) => t.id === rel.startTableId);
+    const endTable = diagram.tables.find((t) => t.id === rel.endTableId);
 
     const pairs = getRelationshipFields(rel);
     const startFieldNames = pairs.map(
-      (p) => startTableFields.find((f) => f.id === p.startFieldId)?.name,
+      (p) => startTable.fields.find((f) => f.id === p.startFieldId)?.name,
     );
     const endFieldNames = pairs.map(
-      (p) => endTableFields.find((f) => f.id === p.endFieldId)?.name,
+      (p) => endTable.fields.find((f) => f.id === p.endFieldId)?.name,
     );
 
-    return `Ref ${quoteIdentifier(rel.name)} {\n\t${columnRef(startTableName, startFieldNames)} ${cardinality(rel)} ${columnRef(endTableName, endFieldNames)} [ delete: ${rel.deleteConstraint.toLowerCase()}, update: ${rel.updateConstraint.toLowerCase()} ]\n}`;
+    return `Ref ${quoteIdentifier(rel.name)} {\n\t${columnRef(startTable, startFieldNames)} ${cardinality(rel)} ${columnRef(endTable, endFieldNames)} [ delete: ${rel.deleteConstraint.toLowerCase()}, update: ${rel.updateConstraint.toLowerCase()} ]\n}`;
   };
 
   let enumDefinitions = "";
@@ -153,7 +162,7 @@ export function toDBML(diagram) {
     .join("\n\n")}${enumDefinitions}${diagram.tables
     .map(
       (table) =>
-        `Table ${quoteIdentifier(table.name)} [headercolor: ${table.color}] {\n${table.fields
+        `Table ${qualifiedName(table)} [headercolor: ${table.color}] {\n${table.fields
           .map(
             (field) =>
               `\t${quoteIdentifier(field.name)} ${

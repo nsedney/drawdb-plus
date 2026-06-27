@@ -63,6 +63,7 @@ export default function DiagramContextProvider({ children }) {
       uniqueConstraints: [],
       color: defaultBlue,
       collapsed: false,
+      schemaId: null,
     };
     if (data) {
       setTables((prev) => {

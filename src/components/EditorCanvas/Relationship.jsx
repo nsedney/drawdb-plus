@@ -1,7 +1,13 @@
 import { useMemo, useRef, useState, useEffect } from "react";
 import { Cardinality, ObjectType, Tab } from "../../data/constants";
 import { calcPath, calcCompositePath } from "../../utils/calcPath";
-import { useDiagram, useSettings, useLayout, useSelect } from "../../hooks";
+import {
+  useDiagram,
+  useSettings,
+  useLayout,
+  useSelect,
+  useSchemas,
+} from "../../hooks";
 import { useTranslation } from "react-i18next";
 import { SideSheet } from "@douyinfe/semi-ui";
 import RelationshipInfo from "../EditorSidePanel/RelationshipsTab/RelationshipInfo";
@@ -9,6 +15,7 @@ import {
   getVisibleFieldIndex,
   getVisibleFields,
   getRelationshipFields,
+  isTableHidden,
 } from "../../utils/utils";
 
 const labelFontSize = 16;
@@ -16,6 +23,7 @@ const labelFontSize = 16;
 export default function Relationship({ data }) {
   const { settings } = useSettings();
   const { tables, relationships } = useDiagram();
+  const { schemas } = useSchemas();
   const { layout } = useLayout();
   const { selectedElement, setSelectedElement } = useSelect();
   const { t } = useTranslation();
@@ -24,7 +32,12 @@ export default function Relationship({ data }) {
     const startTable = tables.find((t) => t.id === data.startTableId);
     const endTable = tables.find((t) => t.id === data.endTableId);
 
-    if (!startTable || !endTable || startTable.hidden || endTable.hidden)
+    if (
+      !startTable ||
+      !endTable ||
+      isTableHidden(startTable, schemas) ||
+      isTableHidden(endTable, schemas)
+    )
       return null;
 
     const startFields = getVisibleFields(startTable, relationships);
@@ -62,7 +75,7 @@ export default function Relationship({ data }) {
         fields: endFields,
       },
     };
-  }, [tables, relationships, data]);
+  }, [tables, relationships, data, schemas]);
 
   const isComposite = (pathValues?.startFieldIndices?.length ?? 0) > 1;
 

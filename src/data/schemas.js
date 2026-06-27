@@ -75,8 +75,20 @@ export const tableSchema = {
       type: "array",
       items: { type: ["string"] },
     },
+    schemaId: { type: ["string", "null"] },
   },
   required: ["id", "name", "x", "y", "fields", "comment", "indices", "color"],
+};
+
+export const schemaSchema = {
+  type: "object",
+  properties: {
+    id: { type: "string" },
+    name: { type: "string" },
+    color: { type: "string", pattern: "^#[0-9a-fA-F]{6}$" },
+    hidden: { type: "boolean" },
+  },
+  required: ["id", "name", "color"],
 };
 
 export const areaSchema = {
@@ -206,6 +218,10 @@ export const jsonSchema = {
     enums: {
       type: "array",
       items: { ...enumSchema },
+    },
+    schemas: {
+      type: "array",
+      items: { ...schemaSchema },
     },
     title: { type: "string" },
     database: { type: "string" },

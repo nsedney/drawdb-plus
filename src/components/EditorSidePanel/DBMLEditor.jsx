@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useDiagram, useEnums } from "../../hooks";
+import { useDiagram, useEnums, useSchemas } from "../../hooks";
 import { toDBML } from "../../utils/exportAs/dbml";
 import CodeEditor from "../CodeEditor";
 
@@ -7,11 +7,14 @@ export default function DBMLEditor() {
   const { tables: currentTables, relationships } = useDiagram();
   const diagram = useDiagram();
   const { enums } = useEnums();
-  const [value, setValue] = useState(() => toDBML({ ...diagram, enums }));
+  const { schemas } = useSchemas();
+  const [value, setValue] = useState(() =>
+    toDBML({ ...diagram, enums, schemas }),
+  );
 
   useEffect(() => {
-    setValue(toDBML({ tables: currentTables, enums, relationships }));
-  }, [currentTables, enums, relationships]);
+    setValue(toDBML({ tables: currentTables, enums, relationships, schemas }));
+  }, [currentTables, enums, relationships, schemas]);
 
   return (
     <CodeEditor

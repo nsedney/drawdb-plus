@@ -32,6 +32,7 @@ import {
   useSettings,
   useDiagram,
   useSelect,
+  useSchemas,
   useUndoRedo,
 } from "../../hooks";
 import TableInfo from "../EditorSidePanel/TablesTab/TableInfo";
@@ -46,6 +47,7 @@ import {
   getVisibleFieldEntries,
   getVisibleFields,
   getRelationshipFields,
+  isTableHidden,
 } from "../../utils/utils";
 
 export default function Table({
@@ -67,6 +69,7 @@ export default function Table({
     updateTable,
   } = useDiagram();
   const { setUndoStack, setRedoStack } = useUndoRedo();
+  const { schemas } = useSchemas();
   const { settings } = useSettings();
   const { t } = useTranslation();
   const {
@@ -234,7 +237,7 @@ export default function Table({
     return { tableName: refTable.name, fieldName: refField.name };
   };
 
-  if (tableData.hidden) return null;
+  if (isTableHidden(tableData, schemas)) return null;
 
   return (
     <>

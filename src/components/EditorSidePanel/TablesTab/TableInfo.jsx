@@ -7,6 +7,7 @@ import {
   Card,
   Select,
   Dropdown,
+  Popover,
 } from "@douyinfe/semi-ui";
 import ColorPicker from "../ColorPicker";
 import { IconDeleteStroked, IconPlus } from "@douyinfe/semi-icons";
@@ -14,8 +15,10 @@ import {
   useDiagram,
   useLayout,
   useSaveState,
+  useSchemas,
   useUndoRedo,
 } from "../../../hooks";
+import { CylinderIcon } from "../../EditorCanvas/SchemaGroup";
 import { Action, ObjectType, State, DB } from "../../../data/constants";
 import TableField from "./TableField";
 import IndexDetails from "./IndexDetails";
@@ -33,10 +36,34 @@ export default function TableInfo({ data }) {
   const [showComment, setShowComment] = useState(false);
   const { layout } = useLayout();
   const { deleteTable, updateTable, setTables } = useDiagram();
+  const { schemas, addSchema } = useSchemas();
   const { setUndoStack, setRedoStack } = useUndoRedo();
   const { setSaveState } = useSaveState();
   const [editField, setEditField] = useState({});
   const initialColorRef = useRef(data.color);
+
+  const assignSchema = (schemaId) => {
+    if (schemaId === (data.schemaId ?? null)) return;
+    setUndoStack((prev) => [
+      ...prev,
+      {
+        action: Action.EDIT,
+        element: ObjectType.TABLE,
+        component: "self",
+        tid: data.id,
+        undo: { schemaId: data.schemaId ?? null },
+        redo: { schemaId },
+        message: t("edit_table", { tableName: data.name, extra: "[schema]" }),
+      },
+    ]);
+    setRedoStack([]);
+    updateTable(data.id, { schemaId });
+  };
+
+  const createAndAssignSchema = () => {
+    const created = addSchema();
+    assignSchema(created.id);
+  };
 
   const handleColorPick = (color) => {
     setUndoStack((prev) => {
@@ -353,6 +380,7 @@ export default function TableInfo({ data }) {
       )}
 
       <div className="flex justify-between items-center gap-1 mt-5 mb-2">
+        <div className="flex items-center gap-1">
         <ColorPicker
           usePopover={true}
           readOnly={layout.readOnly}
@@ -360,6 +388,60 @@ export default function TableInfo({ data }) {
           onChange={(color) => updateTable(data.id, { color })}
           onColorPick={(color) => handleColorPick(color)}
         />
+        <Popover
+          trigger="click"
+          position="bottomLeft"
+          showArrow
+          content={
+            <div className="popover-theme flex flex-col gap-1 p-1 w-52 max-h-60 overflow-y-auto">
+              {schemas.map((s) => (
+                <Button
+                  key={s.id}
+                  block
+                  theme="borderless"
+                  type="tertiary"
+                  style={{ justifyContent: "flex-start" }}
+                  icon={<CylinderIcon color={s.color} />}
+                  onClick={() => assignSchema(s.id)}
+                  disabled={layout.readOnly}
+                >
+                  {s.name}
+                  {data.schemaId === s.id ? " ✓" : ""}
+                </Button>
+              ))}
+              {data.schemaId && (
+                <Button
+                  block
+                  theme="borderless"
+                  type="tertiary"
+                  style={{ justifyContent: "flex-start" }}
+                  onClick={() => assignSchema(null)}
+                  disabled={layout.readOnly}
+                >
+                  {t("remove_from_schema")}
+                </Button>
+              )}
+              <Button
+                block
+                theme="borderless"
+                type="tertiary"
+                style={{ justifyContent: "flex-start" }}
+                icon={<IconPlus />}
+                onClick={createAndAssignSchema}
+                disabled={layout.readOnly}
+              >
+                {t("create_schema")}
+              </Button>
+            </div>
+          }
+        >
+          <Button
+            icon={<CylinderIcon color="currentColor" />}
+            disabled={layout.readOnly}
+            title={t("schema")}
+          />
+        </Popover>
+        </div>
         <div className="flex gap-1">
           <Dropdown
             position="bottomLeft"

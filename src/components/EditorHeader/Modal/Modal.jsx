@@ -8,6 +8,7 @@ import { DB, MODAL, STATUS } from "../../../data/constants";
 import { databases } from "../../../data/databases";
 import {
   useAreas,
+  useSchemas,
   useDiagram,
   useEnums,
   useNavigateWithParams,
@@ -56,6 +57,7 @@ export default function Modal({
   const { setTables, setRelationships, database } = useDiagram();
   const { setNotes } = useNotes();
   const { setAreas } = useAreas();
+  const { setSchemas } = useSchemas();
   const { setTypes } = useTypes();
   const { setEnums } = useEnums();
   const { setTransform } = useTransform();
@@ -84,6 +86,7 @@ export default function Modal({
     setTables(importData.tables);
     setRelationships(importData.relationships);
     setAreas(importData.subjectAreas ?? []);
+    setSchemas(importData.schemas ?? []);
     setNotes(importData.notes ?? []);
     if (importData.title) {
       setTitle(importData.title);
@@ -139,6 +142,7 @@ export default function Modal({
         setTransform((prev) => ({ ...prev, pan: { x: 0, y: 0 } }));
         setNotes([]);
         setAreas([]);
+        setSchemas([]);
       } else {
         setTables((prev) => [...prev, ...diagramData.tables]);
         setRelationships((prev) =>

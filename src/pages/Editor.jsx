@@ -4,6 +4,7 @@ import TablesContextProvider from "../context/DiagramContext";
 import UndoRedoContextProvider from "../context/UndoRedoContext";
 import SelectContextProvider from "../context/SelectContext";
 import AreasContextProvider from "../context/AreasContext";
+import SchemasContextProvider from "../context/SchemasContext";
 import NotesContextProvider from "../context/NotesContext";
 import TypesContextProvider from "../context/TypesContext";
 import SettingsContextProvider from "../context/SettingsContext";
@@ -22,17 +23,19 @@ export default function Editor() {
           <UndoRedoContextProvider>
             <SelectContextProvider>
               <AreasContextProvider>
-                <NotesContextProvider>
-                  <TypesContextProvider>
-                    <EnumsContextProvider>
-                      <TablesContextProvider>
-                        <SaveStateContextProvider>
-                          <WorkSpace />
-                        </SaveStateContextProvider>
-                      </TablesContextProvider>
-                    </EnumsContextProvider>
-                  </TypesContextProvider>
-                </NotesContextProvider>
+                <SchemasContextProvider>
+                  <NotesContextProvider>
+                    <TypesContextProvider>
+                      <EnumsContextProvider>
+                        <TablesContextProvider>
+                          <SaveStateContextProvider>
+                            <WorkSpace />
+                          </SaveStateContextProvider>
+                        </TablesContextProvider>
+                      </EnumsContextProvider>
+                    </TypesContextProvider>
+                  </NotesContextProvider>
+                </SchemasContextProvider>
               </AreasContextProvider>
             </SelectContextProvider>
           </UndoRedoContextProvider>

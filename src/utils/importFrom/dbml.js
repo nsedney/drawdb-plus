@@ -1,6 +1,6 @@
 import { Parser } from "@dbml/core";
 import { arrangeTables } from "../arrangeTables";
-import { Cardinality, Constraint } from "../../data/constants";
+import { Cardinality, Constraint, defaultBlue } from "../../data/constants";
 import { nanoid } from "nanoid";
 
 const parser = new Parser();
@@ -11,12 +11,26 @@ export function fromDBML(src) {
   const tables = [];
   const enums = [];
   const relationships = [];
+  const schemas = [];
+
+  // DBML's default schema is "public" — those (and unqualified) tables stay
+  // ungrouped. Every other schema name becomes a drawDB schema group.
+  const schemaIdByName = {};
+  const getSchemaId = (name) => {
+    if (!name || name === "public") return null;
+    if (schemaIdByName[name]) return schemaIdByName[name];
+    const created = { id: nanoid(), name, color: defaultBlue, hidden: false };
+    schemas.push(created);
+    schemaIdByName[name] = created.id;
+    return created.id;
+  };
 
   for (const schema of ast.schemas) {
     for (const table of schema.tables) {
       let parsedTable = {};
       parsedTable.id = nanoid();
       parsedTable.name = table.name;
+      parsedTable.schemaId = getSchemaId(schema.name);
       parsedTable.comment = table.note ?? "";
       parsedTable.color = table.headerColor ?? "#175e7a";
       parsedTable.fields = [];
@@ -123,7 +137,7 @@ export function fromDBML(src) {
     }
   }
 
-  const diagram = { tables, enums, relationships };
+  const diagram = { tables, enums, relationships, schemas };
 
   arrangeTables(diagram);
 

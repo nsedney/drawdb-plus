@@ -243,5 +243,27 @@
   stroke-width: 6;
   stroke-dasharray: 12 8;
   animation: dash-right 1s linear infinite;
-  
+
+}
+
+/* Schema delete confirmation: tighter padding all around + close button pinned
+   to the top-right corner (Semi otherwise lays it out inline in the header,
+   which pushes it down by the header's margin). */
+.schema-delete-modal .semi-modal-content {
+  padding: 0 20px;
+}
+.schema-delete-modal .semi-modal-header {
+  margin: 18px 0 6px;
+  padding-right: 30px;
+}
+.schema-delete-modal .semi-modal-footer {
+  margin: 14px 0 18px;
+}
+.schema-delete-modal .semi-modal-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+}
+.schema-delete-modal .semi-modal-footer .semi-button {
+  margin-left: 0;
 }

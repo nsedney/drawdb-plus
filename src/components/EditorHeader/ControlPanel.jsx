@@ -61,6 +61,8 @@ import {
   useTypes,
   useNotes,
   useAreas,
+  useSchemas,
+  useSchemaDelete,
   useEnums,
   useFullscreen,
   useNavigateWithParams,
@@ -137,6 +139,9 @@ export default function ControlPanel({
   const { types, addType, deleteType, updateType, setTypes } = useTypes();
   const { notes, setNotes, updateNote, addNote, deleteNote } = useNotes();
   const { areas, setAreas, updateArea, addArea, deleteArea } = useAreas();
+  const { schemas, setSchemas, addSchema, updateSchema, deleteSchema } =
+    useSchemas();
+  const confirmDeleteSchema = useSchemaDelete();
   const { undoStack, redoStack, setUndoStack, setRedoStack } = useUndoRedo();
   const { selectedElement, setSelectedElement } = useSelect();
   const { transform, setTransform } = useTransform();
@@ -178,6 +183,8 @@ export default function ControlPanel({
         deleteType(a.data.type.id, false);
       } else if (a.element === ObjectType.ENUM) {
         deleteEnum(a.data.enum.id, false);
+      } else if (a.element === ObjectType.SCHEMA) {
+        deleteSchema(a.data.id, false);
       }
       setRedoStack((prev) => [...prev, a]);
     } else if (a.action === Action.MOVE) {
@@ -212,6 +219,11 @@ export default function ControlPanel({
         addType(a.data, false);
       } else if (a.element === ObjectType.ENUM) {
         addEnum(a.data, false);
+      } else if (a.element === ObjectType.SCHEMA) {
+        // Atomic schema delete restores the pre-delete snapshot.
+        setTables(a.data.before.tables);
+        setRelationships(a.data.before.relationships);
+        setSchemas(a.data.before.schemas);
       }
       setRedoStack((prev) => [...prev, a]);
     } else if (a.action === Action.EDIT) {
@@ -341,6 +353,8 @@ export default function ControlPanel({
             );
           }
         }
+      } else if (a.element === ObjectType.SCHEMA) {
+        updateSchema(a.sid, a.undo);
       }
       setRedoStack((prev) => [...prev, a]);
     }
@@ -378,6 +392,8 @@ export default function ControlPanel({
         addType(a.data, false);
       } else if (a.element === ObjectType.ENUM) {
         addEnum(a.data, false);
+      } else if (a.element === ObjectType.SCHEMA) {
+        addSchema(a.data, false);
       }
       setUndoStack((prev) => [...prev, a]);
     } else if (a.action === Action.MOVE) {
@@ -411,6 +427,10 @@ export default function ControlPanel({
         deleteType(a.data.type.id, false);
       } else if (a.element === ObjectType.ENUM) {
         deleteEnum(a.data.enum.id, false);
+      } else if (a.element === ObjectType.SCHEMA) {
+        setTables(a.data.after.tables);
+        setRelationships(a.data.after.relationships);
+        setSchemas(a.data.after.schemas);
       }
       setUndoStack((prev) => [...prev, a]);
     } else if (a.action === Action.EDIT) {
@@ -542,6 +562,8 @@ export default function ControlPanel({
             );
           }
         }
+      } else if (a.element === ObjectType.SCHEMA) {
+        updateSchema(a.sid, a.redo);
       }
       setUndoStack((prev) => [...prev, a]);
     }
@@ -711,6 +733,11 @@ export default function ControlPanel({
         break;
       case ObjectType.AREA:
         deleteArea(selectedElement.id);
+        break;
+      case ObjectType.SCHEMA:
+        // Same prompt as the left-panel delete (ungroup / delete-with-tables /
+        // cancel).
+        confirmDeleteSchema(schemas.find((s) => s.id === selectedElement.id));
         break;
       default:
         break;
@@ -939,6 +966,7 @@ export default function ControlPanel({
               relationships: relationships,
               notes: notes,
               subjectAreas: areas,
+              schemas: schemas,
               custom: 1,
               templateId: crypto.randomUUID(),
               ...(databases[database].hasEnums && { enums: enums }),
@@ -1250,6 +1278,7 @@ export default function ControlPanel({
                   relationships: relationships,
                   notes: notes,
                   subjectAreas: areas,
+                  schemas: schemas,
                   database: database,
                   ...(databases[database].hasTypes && { types: types }),
                   ...(databases[database].hasEnums && { enums: enums }),
@@ -1273,6 +1302,7 @@ export default function ControlPanel({
                 tables,
                 relationships,
                 enums,
+                schemas,
                 database,
               });
               setExportData((prev) => ({

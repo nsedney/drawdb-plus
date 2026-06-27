@@ -258,3 +258,47 @@ export function getTableHeight(
     getCommentHeight(table.comment, width, showComments)
   );
 }
+
+// A table is effectively hidden if it's individually hidden OR its schema is.
+export function isTableHidden(table, schemas) {
+  if (!table) return false;
+  if (table.hidden) return true;
+  if (!table.schemaId || !schemas) return false;
+  return !!schemas.find((s) => s.id === table.schemaId)?.hidden;
+}
+
+export const schemaGroupTitleHeight = 26;
+export const schemaGroupPadding = 16;
+
+// A schema's box is derived from its (visible) member tables' bounding box,
+// plus padding and room at the top for the title bar. Returns null if the
+// schema has no visible members (empty schemas don't render).
+export function getSchemaRect(schemaId, tables, settings, relationships = []) {
+  const members = tables.filter((t) => t.schemaId === schemaId && !t.hidden);
+  if (members.length === 0) return null;
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const t of members) {
+    const h = getTableHeight(
+      t,
+      settings.tableWidth,
+      settings.showComments,
+      relationships,
+    );
+    minX = Math.min(minX, t.x);
+    minY = Math.min(minY, t.y);
+    maxX = Math.max(maxX, t.x + settings.tableWidth);
+    maxY = Math.max(maxY, t.y + h);
+  }
+
+  const top = schemaGroupPadding + schemaGroupTitleHeight;
+  return {
+    x: minX - schemaGroupPadding,
+    y: minY - top,
+    width: maxX - minX + schemaGroupPadding * 2,
+    height: maxY - minY + top + schemaGroupPadding,
+  };
+}

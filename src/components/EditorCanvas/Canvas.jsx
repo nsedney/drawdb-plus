@@ -15,6 +15,7 @@ import Table from "./Table";
 import Area from "./Area";
 import Relationship from "./Relationship";
 import Note from "./Note";
+import SchemaGroup from "./SchemaGroup";
 import {
   useCanvas,
   useSettings,
@@ -23,6 +24,7 @@ import {
   useUndoRedo,
   useSelect,
   useAreas,
+  useSchemas,
   useNotes,
   useLayout,
   useSaveState,
@@ -30,8 +32,16 @@ import {
 } from "../../hooks";
 import { useTranslation } from "react-i18next";
 import { useEventListener } from "usehooks-ts";
-import { areFieldsCompatible, getTableHeight } from "../../utils/utils";
-import { getRectFromEndpoints, isInsideRect } from "../../utils/rect";
+import {
+  areFieldsCompatible,
+  getTableHeight,
+  getSchemaRect,
+} from "../../utils/utils";
+import {
+  getRectFromEndpoints,
+  isInsideRect,
+  isPointInRect,
+} from "../../utils/rect";
 import { State, noteWidth } from "../../data/constants";
 import { nanoid } from "nanoid";
 
@@ -49,6 +59,7 @@ export default function Canvas() {
     useDiagram();
   const { setSaveState } = useSaveState();
   const { areas, updateArea } = useAreas();
+  const { schemas } = useSchemas();
   const { notes, updateNote } = useNotes();
   const { layout } = useLayout();
   const { settings } = useSettings();
@@ -227,6 +238,37 @@ export default function Canvas() {
     if (selectedElement.open && !layout.sidebar) return;
 
     if (!e.isPrimary) return;
+
+    // Dragging a schema group = bulk-moving its member tables. Select the schema
+    // and seed the existing bulk-move machinery with all its members.
+    if (type === ObjectType.SCHEMA) {
+      setSelectedElement((prev) => ({
+        ...prev,
+        element: ObjectType.SCHEMA,
+        id: element.id,
+        open: false,
+      }));
+      const members = tables.filter((t) => t.schemaId === element.id);
+      if (members.length === 0) return;
+      setBulkSelectedElements(
+        members.map((t) => ({
+          id: t.id,
+          type: ObjectType.TABLE,
+          currentCoords: { x: t.x, y: t.y },
+          initialCoords: { x: t.x, y: t.y },
+        })),
+      );
+      const anchor = members[0];
+      setDragging({
+        id: anchor.id,
+        type: ObjectType.TABLE,
+        grabOffset: {
+          x: pointer.spaces.diagram.x - anchor.x,
+          y: pointer.spaces.diagram.y - anchor.y,
+        },
+      });
+      return;
+    }
 
     if (!element.locked || !(e.ctrlKey || e.metaKey)) {
       setSelectedElement((prev) => ({
@@ -543,6 +585,45 @@ export default function Canvas() {
           initialCoords: { ...el.currentCoords },
         })),
       );
+
+      // Drag-to-add: a dragged table whose center lands inside a schema's box
+      // joins that schema. Never clears schemaId (removal is left-panel only).
+      if (schemas.length > 0) {
+        const schemaRects = schemas
+          .map((s) => ({
+            id: s.id,
+            rect: getSchemaRect(s.id, tables, settings, relationships),
+          }))
+          .filter((s) => s.rect);
+        bulkSelectedElements.forEach((el) => {
+          if (el.type !== ObjectType.TABLE) return;
+          const table = tables.find((t) => t.id === el.id);
+          if (!table) return;
+          const cx = el.currentCoords.x + settings.tableWidth / 2;
+          const cy =
+            el.currentCoords.y +
+            getTableHeight(
+              table,
+              settings.tableWidth,
+              settings.showComments,
+              relationships,
+            ) /
+              2;
+          const hit = schemaRects.find((s) => isPointInRect(cx, cy, s.rect));
+          if (hit && table.schemaId !== hit.id) {
+            updateTable(el.id, { schemaId: hit.id });
+          }
+        });
+      }
+    }
+
+    // Grabbing a schema temporarily puts all its member tables in the bulk
+    // selection (so the group moves together). Clear it on pointer-up — whether
+    // or not a drag happened — so individual member tables stay independently
+    // draggable afterward. The schema itself stays the selected element, and a
+    // marquee multi-select (selectedElement !== SCHEMA) is left intact.
+    if (selectedElement.element === ObjectType.SCHEMA) {
+      setBulkSelectedElements([]);
     }
 
     if (bulkSelectRect.show) {
@@ -790,21 +871,53 @@ export default function Canvas() {
           {relationships.map((e) => (
             <Relationship key={e.id} data={e} />
           ))}
-          {tables.map((table) => (
-            <Table
-              key={table.id}
-              tableData={table}
-              setHoveredTable={setHoveredTable}
-              handleGripField={handleGripField}
-              setLinkingLine={setLinkingLine}
-              onPointerDown={() => {
-                elementPointerDown = {
-                  element: table,
-                  type: ObjectType.TABLE,
-                };
-              }}
-            />
-          ))}
+          {(() => {
+            // Weave schema group outlines into the tables in array order: each
+            // schema's box is rendered right before its first member table, so
+            // earlier tables sit under the outline and members + later tables
+            // paint on top of it.
+            const schemasById = Object.fromEntries(
+              schemas.map((s) => [s.id, s]),
+            );
+            const renderedSchemas = new Set();
+            const nodes = [];
+            tables.forEach((table) => {
+              const schema = table.schemaId
+                ? schemasById[table.schemaId]
+                : null;
+              if (schema && !schema.hidden && !renderedSchemas.has(schema.id)) {
+                renderedSchemas.add(schema.id);
+                nodes.push(
+                  <SchemaGroup
+                    key={`schema_${schema.id}`}
+                    schema={schema}
+                    onPointerDown={() => {
+                      elementPointerDown = {
+                        element: schema,
+                        type: ObjectType.SCHEMA,
+                      };
+                    }}
+                  />,
+                );
+              }
+              nodes.push(
+                <Table
+                  key={table.id}
+                  tableData={table}
+                  setHoveredTable={setHoveredTable}
+                  handleGripField={handleGripField}
+                  setLinkingLine={setLinkingLine}
+                  onPointerDown={() => {
+                    elementPointerDown = {
+                      element: table,
+                      type: ObjectType.TABLE,
+                    };
+                  }}
+                />,
+              );
+            });
+            return nodes;
+          })()}
           {linking && (
             <path
               d={`M ${linkingLine.startX} ${linkingLine.startY} L ${linkingLine.endX} ${linkingLine.endY}`}

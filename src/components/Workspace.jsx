@@ -21,6 +21,7 @@ import {
   useDiagram,
   useUndoRedo,
   useAreas,
+  useSchemas,
   useNotes,
   useTypes,
   useSaveState,
@@ -69,6 +70,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
   const { settings } = useSettings();
   const { types, setTypes } = useTypes();
   const { areas, setAreas } = useAreas();
+  const { schemas, setSchemas } = useSchemas();
   const { notes, setNotes } = useNotes();
   const { saveState, setSaveState } = useSaveState();
   const { transform, setTransform } = useTransform();
@@ -122,6 +124,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
         references: relationships,
         notes,
         areas,
+        schemas,
         pan: transform.pan,
         zoom: transform.zoom,
         ...(databases[database].hasEnums && { enums }),
@@ -160,6 +163,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
           references: relationships,
           notes: notes,
           areas: areas,
+          schemas: schemas,
           pan: transform.pan,
           zoom: transform.zoom,
           loadedFromGistId: loadedFromGistId,
@@ -183,6 +187,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
           references: relationships,
           notes: notes,
           areas: areas,
+          schemas: schemas,
           gistId: gistId ?? "",
           pan: transform.pan,
           zoom: transform.zoom,
@@ -204,6 +209,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     relationships,
     notes,
     areas,
+    schemas,
     types,
     title,
     transform,
@@ -241,6 +247,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
             setRelationships(diagram.references);
             setNotes(diagram.notes);
             setAreas(diagram.areas);
+            setSchemas(diagram.schemas ?? []);
             setTransform({ pan: diagram.pan, zoom: diagram.zoom });
             if (databases[database].hasTypes) {
               if (diagram.types) {
@@ -303,6 +310,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
       setTables(diagram.tables);
       setRelationships(diagram.references);
       setAreas(diagram.areas);
+      setSchemas(diagram.schemas ?? []);
       setNotes(diagram.notes);
       setTransform({
         pan: diagram.pan,
@@ -352,6 +360,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
         setTables(template.tables);
         setRelationships(template.relationships);
         setAreas(template.subjectAreas);
+        setSchemas(template.schemas ?? []);
         setNotes(template.notes);
         setTransform({
           zoom: 1,
@@ -403,6 +412,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
         setRelationships(parsedDiagram.relationships);
         setNotes(parsedDiagram.notes);
         setAreas(parsedDiagram.subjectAreas);
+        setSchemas(parsedDiagram.schemas ?? []);
         setTransform(parsedDiagram.transform);
         if (databases[parsedDiagram.database].hasTypes) {
           if (parsedDiagram.types) {
@@ -460,6 +470,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
           setTables([]);
           setRelationships([]);
           setAreas([]);
+          setSchemas([]);
           setNotes([]);
           setTypes([]);
           setEnums([]);
@@ -495,6 +506,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     setRelationships,
     setTables,
     setAreas,
+    setSchemas,
     setNotes,
     setTypes,
     setDatabase,
@@ -535,6 +547,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     settings.autosave,
     tables?.length,
     areas?.length,
+    schemas?.length,
     notes?.length,
     types?.length,
     relationships?.length,
