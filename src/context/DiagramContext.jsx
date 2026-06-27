@@ -35,7 +35,7 @@ export default function DiagramContextProvider({ children }) {
     [emitDelta, isApplyingRemoteRef],
   );
 
-  const addTable = (data, addToHistory = true) => {
+  const addTable = (data, addToHistory = true, defaults = {}) => {
     const id = nanoid();
     const newTable = {
       id,
@@ -64,6 +64,8 @@ export default function DiagramContextProvider({ children }) {
       color: defaultBlue,
       collapsed: false,
       schemaId: null,
+      // e.g. { schemaId } when adding a table directly into a schema
+      ...defaults,
     };
     if (data) {
       setTables((prev) => {

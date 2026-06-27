@@ -32,7 +32,11 @@ export function CylinderIcon({ color, size = 14 }) {
  * inside still start a marquee; only the title bar is grabbable (starts a
  * group drag via the onPointerDown handler supplied by Canvas).
  */
-export default function SchemaGroup({ schema, onPointerDown }) {
+export default function SchemaGroup({
+  schema,
+  onPointerDown,
+  isDropTarget = false,
+}) {
   const { tables, relationships } = useDiagram();
   const { settings } = useSettings();
   const { layout } = useLayout();
@@ -81,10 +85,17 @@ export default function SchemaGroup({ schema, onPointerDown }) {
         height={rect.height}
         rx={16}
         ry={16}
-        fill={`${schema.color}66`}
-        stroke={isSelected ? "#3b82f6" : schema.color}
-        strokeWidth={isSelected ? 3 : 2}
-        style={{ pointerEvents: "none" }}
+        fill={`${schema.color}${isDropTarget ? "99" : "66"}`}
+        stroke={isDropTarget || isSelected ? "#3b82f6" : schema.color}
+        strokeWidth={isDropTarget || isSelected ? 3 : 2}
+        strokeDasharray={isDropTarget ? "8 5" : undefined}
+        style={{
+          pointerEvents: "none",
+          transition: "fill 0.1s ease",
+          filter: isDropTarget
+            ? "drop-shadow(0 0 6px rgba(59, 130, 246, 0.6))"
+            : undefined,
+        }}
       />
       {/* Full-width title band above the tables — the grab handle for dragging
           the whole group. Label is top-padded to match note/area labels. */}

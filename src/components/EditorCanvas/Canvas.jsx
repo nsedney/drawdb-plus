@@ -77,6 +77,9 @@ export default function Canvas() {
     grabOffset: { x: 0, y: 0 },
   };
   const [dragging, setDragging] = useState(notDragging);
+  // Schema ids whose box a currently-dragged table would join on drop — used to
+  // highlight the target box as a drop zone.
+  const [dropTargetSchemaIds, setDropTargetSchemaIds] = useState([]);
   const [linking, setLinking] = useState(false);
   const [linkingLine, setLinkingLine] = useState({
     startTableId: -1,
@@ -419,6 +422,43 @@ export default function Canvas() {
       });
 
       setBulkSelectedElements(newBulkSelectedElements);
+
+      // Mirror the drag-to-add hit test from handlePointerUp so the box that a
+      // dragged table would join lights up as a drop zone while dragging.
+      let hovered = [];
+      if (schemas.length > 0) {
+        const schemaRects = schemas
+          .map((s) => ({
+            id: s.id,
+            rect: getSchemaRect(s.id, tables, settings, relationships),
+          }))
+          .filter((s) => s.rect);
+        newBulkSelectedElements.forEach((el) => {
+          if (el.type !== ObjectType.TABLE) return;
+          const table = tables.find((t) => t.id === el.id);
+          if (!table) return;
+          const cx = el.currentCoords.x + settings.tableWidth / 2;
+          const cy =
+            el.currentCoords.y +
+            getTableHeight(
+              table,
+              settings.tableWidth,
+              settings.showComments,
+              relationships,
+            ) /
+              2;
+          const hit = schemaRects.find((s) => isPointInRect(cx, cy, s.rect));
+          if (hit && table.schemaId !== hit.id && !hovered.includes(hit.id)) {
+            hovered.push(hit.id);
+          }
+        });
+      }
+      setDropTargetSchemaIds((prev) =>
+        prev.length === hovered.length &&
+        prev.every((id) => hovered.includes(id))
+          ? prev
+          : hovered,
+      );
       return;
     }
 
@@ -564,30 +604,11 @@ export default function Canvas() {
     if (!e.isPrimary) return;
 
     if (didDrag()) {
-      setUndoStack((prev) => [
-        ...prev,
-        {
-          action: Action.MOVE,
-          bulk: true,
-          message: t("bulk_update"),
-          elements: bulkSelectedElements.map((el) => ({
-            id: el.id,
-            type: el.type,
-            undo: el.initialCoords,
-            redo: el.currentCoords,
-          })),
-        },
-      ]);
-      setRedoStack([]);
-      setBulkSelectedElements((prev) =>
-        prev.map((el) => ({
-          ...el,
-          initialCoords: { ...el.currentCoords },
-        })),
-      );
-
       // Drag-to-add: a dragged table whose center lands inside a schema's box
       // joins that schema. Never clears schemaId (removal is left-panel only).
+      // Compute the membership changes first so they can be folded into the same
+      // bulk MOVE undo entry — one undo reverts both position and membership.
+      const schemaChanges = {};
       if (schemas.length > 0) {
         const schemaRects = schemas
           .map((s) => ({
@@ -611,11 +632,48 @@ export default function Canvas() {
               2;
           const hit = schemaRects.find((s) => isPointInRect(cx, cy, s.rect));
           if (hit && table.schemaId !== hit.id) {
-            updateTable(el.id, { schemaId: hit.id });
+            schemaChanges[el.id] = { from: table.schemaId ?? null, to: hit.id };
           }
         });
       }
+
+      setUndoStack((prev) => [
+        ...prev,
+        {
+          action: Action.MOVE,
+          bulk: true,
+          message: t("bulk_update"),
+          elements: bulkSelectedElements.map((el) => {
+            const change = schemaChanges[el.id];
+            return {
+              id: el.id,
+              type: el.type,
+              undo: change
+                ? { ...el.initialCoords, schemaId: change.from }
+                : el.initialCoords,
+              redo: change
+                ? { ...el.currentCoords, schemaId: change.to }
+                : el.currentCoords,
+            };
+          }),
+        },
+      ]);
+      setRedoStack([]);
+      setBulkSelectedElements((prev) =>
+        prev.map((el) => ({
+          ...el,
+          initialCoords: { ...el.currentCoords },
+        })),
+      );
+
+      // Positions were already applied during the drag; apply the membership
+      // changes now (the undo entry above already records them).
+      Object.entries(schemaChanges).forEach(([id, change]) => {
+        updateTable(id, { schemaId: change.to });
+      });
     }
+
+    if (dropTargetSchemaIds.length > 0) setDropTargetSchemaIds([]);
 
     // Grabbing a schema temporarily puts all its member tables in the bulk
     // selection (so the group moves together). Clear it on pointer-up — whether
@@ -891,6 +949,7 @@ export default function Canvas() {
                   <SchemaGroup
                     key={`schema_${schema.id}`}
                     schema={schema}
+                    isDropTarget={dropTargetSchemaIds.includes(schema.id)}
                     onPointerDown={() => {
                       elementPointerDown = {
                         element: schema,

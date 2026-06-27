@@ -106,6 +106,7 @@ const en = {
     delete_schema_and_tables: "Delete schema and its tables",
     keep_tables: "Keep tables",
     delete_tables: "Delete tables",
+    ungrouped_tables: "Ungrouped tables",
     delete_schema_confirm:
       "Keep its tables (they'll be ungrouped), or delete them too?",
     add_note: "Add note",

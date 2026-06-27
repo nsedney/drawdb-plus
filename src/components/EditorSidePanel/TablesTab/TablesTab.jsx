@@ -1,6 +1,6 @@
+import { useEffect, useState } from "react";
 import { Collapse, Button } from "@douyinfe/semi-ui";
-import { IconEyeOpened, IconEyeClosed } from "@douyinfe/semi-icons";
-import { IconPlus } from "@douyinfe/semi-icons";
+import { IconEyeOpened, IconEyeClosed, IconPlus } from "@douyinfe/semi-icons";
 import {
   useSelect,
   useDiagram,
@@ -21,11 +21,42 @@ import SchemaInfo from "./SchemaInfo";
 
 export default function TablesTab() {
   const { tables, addTable, setTables } = useDiagram();
-  const { schemas, addSchema, setSchemas } = useSchemas();
+  const { schemas, addSchema } = useSchemas();
   const { selectedElement, setSelectedElement } = useSelect();
   const { t } = useTranslation();
   const { layout } = useLayout();
   const { setSaveState } = useSaveState();
+  const [openSchemaIds, setOpenSchemaIds] = useState([]);
+
+  // Expand a schema in the panel when it's opened from the canvas, without
+  // collapsing any others that are already open.
+  useEffect(() => {
+    if (selectedElement.element === ObjectType.SCHEMA && selectedElement.open) {
+      const id = `${selectedElement.id}`;
+      setOpenSchemaIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    }
+  }, [selectedElement.element, selectedElement.id, selectedElement.open]);
+
+  const ungrouped = tables.filter((tb) => !tb.schemaId);
+
+  // Reorder only the subset of `tables` belonging to one schema (null =
+  // ungrouped), leaving every other table at its global index. The flat
+  // `tables` array is the canvas paint order, so this splices the reordered
+  // members back into their original slots.
+  const reorderWithin = (schemaId, newOrder) => {
+    setTables((prev) => {
+      const copy = prev.slice();
+      const slots = [];
+      prev.forEach((tb, i) => {
+        if ((tb.schemaId ?? null) === schemaId) slots.push(i);
+      });
+      slots.forEach((slot, k) => {
+        copy[slot] = newOrder[k];
+      });
+      return copy;
+    });
+    setSaveState(State.SAVING);
+  };
 
   return (
     <>
@@ -52,73 +83,86 @@ export default function TablesTab() {
       </div>
 
       {schemas.length > 0 && (
-        <Collapse
-          className="mt-2"
-          activeKey={
-            selectedElement.open &&
-            selectedElement.element === ObjectType.SCHEMA
-              ? `${selectedElement.id}`
-              : ""
-          }
-          keepDOM={false}
-          lazyRender
-          onChange={(k) =>
-            setSelectedElement((prev) => ({
-              ...prev,
-              open: true,
-              id: k[0],
-              element: ObjectType.SCHEMA,
-            }))
-          }
-          accordion
-        >
-          <SortableList
-            keyPrefix="schemas-tab"
-            items={schemas}
-            onChange={(newSchemas) => setSchemas(newSchemas)}
-            afterChange={() => setSaveState(State.SAVING)}
-            renderItem={(item) => <SchemaListItem schema={item} />}
-          />
-        </Collapse>
+        <div className="mt-3">
+          <div className="text-xs font-semibold opacity-60 mb-1 ms-1">
+            {t("schemas")}
+          </div>
+          <Collapse
+            activeKey={openSchemaIds}
+            keepDOM={false}
+            lazyRender
+            onChange={(k) => {
+              const next = Array.isArray(k) ? k : k ? [k] : [];
+              const opened = next.find((id) => !openSchemaIds.includes(id));
+              setOpenSchemaIds(next);
+              if (opened) {
+                setSelectedElement((prev) => ({
+                  ...prev,
+                  open: true,
+                  id: opened,
+                  element: ObjectType.SCHEMA,
+                }));
+              }
+            }}
+          >
+            {schemas.map((s) => (
+              <SchemaListItem
+                key={s.id}
+                schema={s}
+                members={tables.filter((tb) => tb.schemaId === s.id)}
+                onReorder={(newOrder) => reorderWithin(s.id, newOrder)}
+              />
+            ))}
+          </Collapse>
+        </div>
       )}
 
       {tables.length === 0 ? (
         <Empty title={t("no_tables")} text={t("no_tables_text")} />
       ) : (
-        <Collapse
-          activeKey={
-            selectedElement.open && selectedElement.element === ObjectType.TABLE
-              ? `${selectedElement.id}`
-              : ""
-          }
-          keepDOM={false}
-          lazyRender
-          onChange={(k) =>
-            setSelectedElement((prev) => ({
-              ...prev,
-              open: true,
-              id: k[0],
-              element: ObjectType.TABLE,
-            }))
-          }
-          accordion
-        >
-          <SortableList
-            keyPrefix="tables-tab"
-            items={tables}
-            onChange={(newTables) => setTables(newTables)}
-            afterChange={() => setSaveState(State.SAVING)}
-            renderItem={(item) => <TableListItem table={item} />}
-          />
-        </Collapse>
+        ungrouped.length > 0 && (
+          <div className="mt-3">
+            {schemas.length > 0 && (
+              <div className="text-xs font-semibold opacity-60 mb-1 ms-1">
+                {t("ungrouped_tables")}
+              </div>
+            )}
+            <Collapse
+              activeKey={
+                selectedElement.open &&
+                selectedElement.element === ObjectType.TABLE
+                  ? `${selectedElement.id}`
+                  : ""
+              }
+              keepDOM={false}
+              lazyRender
+              onChange={(k) =>
+                setSelectedElement((prev) => ({
+                  ...prev,
+                  open: true,
+                  id: Array.isArray(k) ? k[0] : k,
+                  element: ObjectType.TABLE,
+                }))
+              }
+              accordion
+            >
+              <SortableList
+                keyPrefix="ungrouped-tables"
+                items={ungrouped}
+                onChange={(newOrder) => reorderWithin(null, newOrder)}
+                renderItem={(item) => <TableListItem table={item} />}
+              />
+            </Collapse>
+          </div>
+        )
       )}
     </>
   );
 }
 
-function SchemaListItem({ schema }) {
-  const { layout } = useLayout();
+function SchemaListItem({ schema, members, onReorder }) {
   const { updateSchema } = useSchemas();
+  const { selectedElement, setSelectedElement } = useSelect();
   const { setUndoStack, setRedoStack } = useUndoRedo();
   const { t } = useTranslation();
 
@@ -147,11 +191,10 @@ function SchemaListItem({ schema }) {
       <Collapse.Panel
         className="relative"
         header={
-          <div className="flex items-center justify-between w-full">
-            <div className="flex items-center gap-2 flex-1">
-              <DragHandle readOnly={layout.readOnly} id={schema.id} />
+          <div className="flex items-center justify-between w-full min-w-0">
+            <div className="flex items-center gap-2 flex-1 min-w-0">
               <CylinderIcon color={schema.color} />
-              <div className="overflow-hidden text-ellipsis whitespace-nowrap">
+              <div className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
                 {schema.name}
               </div>
             </div>
@@ -161,7 +204,7 @@ function SchemaListItem({ schema }) {
               type="tertiary"
               onClick={toggleHidden}
               icon={schema.hidden ? <IconEyeClosed /> : <IconEyeOpened />}
-              className="me-2"
+              className="me-2 shrink-0"
             />
             <div
               className="w-1 h-full absolute top-0 left-0 bottom-0"
@@ -171,7 +214,36 @@ function SchemaListItem({ schema }) {
         }
         itemKey={`${schema.id}`}
       >
-        <SchemaInfo data={schema} />
+        <SchemaInfo data={schema}>
+          {members.length > 0 && (
+            <Collapse
+              activeKey={
+                selectedElement.open &&
+                selectedElement.element === ObjectType.TABLE
+                  ? `${selectedElement.id}`
+                  : ""
+              }
+              keepDOM={false}
+              lazyRender
+              onChange={(k) =>
+                setSelectedElement((prev) => ({
+                  ...prev,
+                  open: true,
+                  id: Array.isArray(k) ? k[0] : k,
+                  element: ObjectType.TABLE,
+                }))
+              }
+              accordion
+            >
+              <SortableList
+                keyPrefix={`schema-${schema.id}-tables`}
+                items={members}
+                onChange={(newOrder) => onReorder(newOrder)}
+                renderItem={(item) => <TableListItem table={item} />}
+              />
+            </Collapse>
+          )}
+        </SchemaInfo>
       </Collapse.Panel>
     </div>
   );
@@ -180,13 +252,8 @@ function SchemaListItem({ schema }) {
 function TableListItem({ table }) {
   const { layout } = useLayout();
   const { updateTable } = useDiagram();
-  const { schemas } = useSchemas();
   const { setUndoStack, setRedoStack } = useUndoRedo();
   const { t } = useTranslation();
-
-  const schema = table.schemaId
-    ? schemas.find((s) => s.id === table.schemaId)
-    : null;
 
   const toggleTableVisibility = (e) => {
     e.stopPropagation();
@@ -214,21 +281,12 @@ function TableListItem({ table }) {
       <Collapse.Panel
         className="relative"
         header={
-          <div className="flex items-center justify-between w-full">
-            <div className="flex items-center gap-2 flex-1">
+          <div className="flex items-center justify-between w-full min-w-0">
+            <div className="flex items-center gap-2 flex-1 min-w-0">
               <DragHandle readOnly={layout.readOnly} id={table.id} />
-              <div className="overflow-hidden text-ellipsis whitespace-nowrap">
+              <div className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
                 {table.name}
               </div>
-              {schema && (
-                <div
-                  className="flex items-center gap-1 text-xs opacity-60 shrink-0"
-                  title={schema.name}
-                >
-                  <CylinderIcon color="currentColor" size={11} />
-                  <span className="max-w-16 truncate">{schema.name}</span>
-                </div>
-              )}
             </div>
             <Button
               size="small"
@@ -236,7 +294,7 @@ function TableListItem({ table }) {
               type="tertiary"
               onClick={toggleTableVisibility}
               icon={table.hidden ? <IconEyeClosed /> : <IconEyeOpened />}
-              className="me-2"
+              className="me-2 shrink-0"
             />
             <div
               className="w-1 h-full absolute top-0 left-0 bottom-0"
