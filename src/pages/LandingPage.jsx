@@ -16,7 +16,6 @@ import screenshot from "../assets/screenshot.png";
 import FadeIn from "../animations/FadeIn";
 import axios from "axios";
 import { languages } from "../i18n/i18n";
-import { Tweet } from "react-tweet";
 import { socials } from "../data/socials";
 
 function shortenNumber(number) {
@@ -213,22 +212,6 @@ export default function LandingPage() {
             ))}
           </div>
         </FadeIn>
-      </div>
-
-      {/* Tweets */}
-      <div className="px-40 mt-6 md:px-8">
-        <div className="text-center text-2xl md:text-xl font-medium">
-          What the internet says about us
-        </div>
-        <div
-          data-theme="light"
-          className="grid grid-cols-2 place-items-center md:grid-cols-1"
-        >
-          <Tweet id="1816111365125218343" />
-          <Tweet id="1817933406337905021" />
-          <Tweet id="1785457354777006524" />
-          <Tweet id="1776842268042756248" />
-        </div>
       </div>
 
       {/* Contact us */}
