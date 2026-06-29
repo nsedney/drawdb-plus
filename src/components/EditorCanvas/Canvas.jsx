@@ -36,13 +36,19 @@ import {
   areFieldsCompatible,
   getTableHeight,
   getSchemaRect,
+  getSchemaBox,
+  unionRect,
 } from "../../utils/utils";
 import {
   getRectFromEndpoints,
   isInsideRect,
   isPointInRect,
 } from "../../utils/rect";
-import { State, noteWidth } from "../../data/constants";
+import {
+  State,
+  noteWidth,
+  minSchemaSize,
+} from "../../data/constants";
 import { nanoid } from "nanoid";
 
 export default function Canvas() {
@@ -59,7 +65,7 @@ export default function Canvas() {
     useDiagram();
   const { setSaveState } = useSaveState();
   const { areas, updateArea } = useAreas();
-  const { schemas } = useSchemas();
+  const { schemas, updateSchema } = useSchemas();
   const { notes, updateNote } = useNotes();
   const { layout } = useLayout();
   const { settings } = useSettings();
@@ -77,9 +83,11 @@ export default function Canvas() {
     grabOffset: { x: 0, y: 0 },
   };
   const [dragging, setDragging] = useState(notDragging);
-  // Schema ids whose box a currently-dragged table would join on drop — used to
-  // highlight the target box as a drop zone.
+  // Schema ids whose box a currently-dragged table would join/stay in on drop
+  // (highlighted as the drop endpoint), and origin schemas a table is being
+  // dragged out of (shaded lighter to flag the drag-out).
   const [dropTargetSchemaIds, setDropTargetSchemaIds] = useState([]);
+  const [exitSchemaIds, setExitSchemaIds] = useState([]);
   const [linking, setLinking] = useState(false);
   const [linkingLine, setLinkingLine] = useState({
     startTableId: -1,
@@ -134,6 +142,11 @@ export default function Canvas() {
     width: 0,
     height: 0,
   });
+  // Manual schema-box resize. `initBox` is the box geometry captured at grab
+  // time (restored on undo); `minRect` is the table-derived rect the box must
+  // keep containing, so dragging a handle inward stops at the tables.
+  const [schemaResize, setSchemaResize] = useState({ id: null, dir: "none" });
+  const schemaResizeRef = useRef({ initBox: null, minRect: null });
   const [bulkSelectRect, setBulkSelectRect] = useState({
     x1: 0,
     y1: 0,
@@ -242,8 +255,10 @@ export default function Canvas() {
 
     if (!e.isPrimary) return;
 
-    // Dragging a schema group = bulk-moving its member tables. Select the schema
-    // and seed the existing bulk-move machinery with all its members.
+    // Dragging a schema group moves the box and all its member tables together.
+    // Seed the bulk-move machinery with the schema (as the anchor) plus every
+    // member; the box tracks the cursor and members move rigidly with it. No
+    // membership reassignment happens on a group drag (see handlePointerUp).
     if (type === ObjectType.SCHEMA) {
       setSelectedElement((prev) => ({
         ...prev,
@@ -251,23 +266,29 @@ export default function Canvas() {
         id: element.id,
         open: false,
       }));
+      const box = getSchemaBox(element, tables, settings, relationships);
+      if (!box) return;
       const members = tables.filter((t) => t.schemaId === element.id);
-      if (members.length === 0) return;
-      setBulkSelectedElements(
-        members.map((t) => ({
+      setBulkSelectedElements([
+        {
+          id: element.id,
+          type: ObjectType.SCHEMA,
+          currentCoords: { x: box.x, y: box.y },
+          initialCoords: { x: box.x, y: box.y },
+        },
+        ...members.map((t) => ({
           id: t.id,
           type: ObjectType.TABLE,
           currentCoords: { x: t.x, y: t.y },
           initialCoords: { x: t.x, y: t.y },
         })),
-      );
-      const anchor = members[0];
+      ]);
       setDragging({
-        id: anchor.id,
-        type: ObjectType.TABLE,
+        id: element.id,
+        type: ObjectType.SCHEMA,
         grabOffset: {
-          x: pointer.spaces.diagram.x - anchor.x,
-          y: pointer.spaces.diagram.y - anchor.y,
+          x: pointer.spaces.diagram.x - box.x,
+          y: pointer.spaces.diagram.y - box.y,
         },
       });
       return;
@@ -352,6 +373,36 @@ export default function Canvas() {
     return { x, y };
   };
 
+  // The schema whose stored box contains a point, or null. On overlap the
+  // smallest-area box wins (most specific). Drives drop membership + the
+  // drag-over highlight.
+  const findContainingSchemaId = (cx, cy) => {
+    let best = null;
+    let bestArea = Infinity;
+    for (const s of schemas) {
+      const box = getSchemaBox(s, tables, settings, relationships);
+      if (!box || !isPointInRect(cx, cy, box)) continue;
+      const area = box.width * box.height;
+      if (area < bestArea) {
+        bestArea = area;
+        best = s.id;
+      }
+    }
+    return best;
+  };
+
+  const handleSchemaResizeStart = (e, schemaId, dir) => {
+    const schema = schemas.find((s) => s.id === schemaId);
+    const box = getSchemaBox(schema, tables, settings, relationships);
+    if (!box) return;
+    schemaResizeRef.current = {
+      initBox: box,
+      // The box must keep containing its members; null for an empty schema.
+      minRect: getSchemaRect(schemaId, tables, settings, relationships),
+    };
+    setSchemaResize({ id: schemaId, dir });
+  };
+
   /**
    * @param {PointerEvent} e
    */
@@ -415,6 +466,9 @@ export default function Canvas() {
         if (el.type === ObjectType.NOTE) {
           updateNote(el.id, { ...elementFinalCoords });
         }
+        if (el.type === ObjectType.SCHEMA) {
+          updateSchema(el.id, { ...elementFinalCoords });
+        }
         newBulkSelectedElements.push({
           ...el,
           currentCoords: elementFinalCoords,
@@ -423,16 +477,14 @@ export default function Canvas() {
 
       setBulkSelectedElements(newBulkSelectedElements);
 
-      // Mirror the drag-to-add hit test from handlePointerUp so the box that a
-      // dragged table would join lights up as a drop zone while dragging.
+      // Highlight schemas the drag affects (skipped for a group drag, which
+      // never reassigns). `hovered` = the box a table would drop into (its
+      // origin while still inside it, so the source reads as an active
+      // endpoint, or a new box once over one). `exiting` = a table's origin
+      // once its center has left that box, shaded lighter to flag drag-out.
       let hovered = [];
-      if (schemas.length > 0) {
-        const schemaRects = schemas
-          .map((s) => ({
-            id: s.id,
-            rect: getSchemaRect(s.id, tables, settings, relationships),
-          }))
-          .filter((s) => s.rect);
+      let exiting = [];
+      if (schemas.length > 0 && dragging.type !== ObjectType.SCHEMA) {
         newBulkSelectedElements.forEach((el) => {
           if (el.type !== ObjectType.TABLE) return;
           const table = tables.find((t) => t.id === el.id);
@@ -447,18 +499,60 @@ export default function Canvas() {
               relationships,
             ) /
               2;
-          const hit = schemaRects.find((s) => isPointInRect(cx, cy, s.rect));
-          if (hit && table.schemaId !== hit.id && !hovered.includes(hit.id)) {
-            hovered.push(hit.id);
+          const hit = findContainingSchemaId(cx, cy);
+          const origin = table.schemaId ?? null;
+          if (hit && !hovered.includes(hit)) hovered.push(hit);
+          if (origin && hit !== origin && !exiting.includes(origin)) {
+            exiting.push(origin);
           }
         });
       }
-      setDropTargetSchemaIds((prev) =>
-        prev.length === hovered.length &&
-        prev.every((id) => hovered.includes(id))
-          ? prev
-          : hovered,
-      );
+      const sameSet = (a, b) =>
+        a.length === b.length && a.every((id) => b.includes(id));
+      setDropTargetSchemaIds((prev) => (sameSet(prev, hovered) ? prev : hovered));
+      setExitSchemaIds((prev) => (sameSet(prev, exiting) ? prev : exiting));
+      return;
+    }
+
+    if (schemaResize.id) {
+      setPanning((old) => ({ ...old, isPanning: false }));
+      const { initBox, minRect } = schemaResizeRef.current;
+      if (!initBox) return;
+      const { x, y } = coordinatesAfterSnappingToGrid(pointer.spaces.diagram);
+      const dir = schemaResize.dir;
+      // Move only the dragged edges; the opposite edges stay put. Each dragged
+      // edge is clamped so the box keeps a minimum size and never crosses into
+      // the member tables' bounding box (minRect, null when the schema is empty).
+      let L = initBox.x;
+      let T = initBox.y;
+      let R = initBox.x + initBox.width;
+      let B = initBox.y + initBox.height;
+      if (dir.includes("l")) {
+        L = Math.min(x, R - minSchemaSize, minRect ? minRect.x : Infinity);
+      }
+      if (dir.includes("r")) {
+        R = Math.max(
+          x,
+          L + minSchemaSize,
+          minRect ? minRect.x + minRect.width : -Infinity,
+        );
+      }
+      if (dir.includes("t")) {
+        T = Math.min(y, B - minSchemaSize, minRect ? minRect.y : Infinity);
+      }
+      if (dir.includes("b")) {
+        B = Math.max(
+          y,
+          T + minSchemaSize,
+          minRect ? minRect.y + minRect.height : -Infinity,
+        );
+      }
+      updateSchema(schemaResize.id, {
+        x: L,
+        y: T,
+        width: R - L,
+        height: B - T,
+      });
       return;
     }
 
@@ -604,18 +698,13 @@ export default function Canvas() {
     if (!e.isPrimary) return;
 
     if (didDrag()) {
-      // Drag-to-add: a dragged table whose center lands inside a schema's box
-      // joins that schema. Never clears schemaId (removal is left-panel only).
-      // Compute the membership changes first so they can be folded into the same
-      // bulk MOVE undo entry — one undo reverts both position and membership.
-      const schemaChanges = {};
-      if (schemas.length > 0) {
-        const schemaRects = schemas
-          .map((s) => ({
-            id: s.id,
-            rect: getSchemaRect(s.id, tables, settings, relationships),
-          }))
-          .filter((s) => s.rect);
+      const isGroupDrag = dragging.type === ObjectType.SCHEMA;
+
+      // Membership on drop (individual / marquee table drag only): a table whose
+      // center lands inside a schema box joins it; outside every box → ungrouped
+      // ("public"). A group drag never reassigns — the box moved with its tables.
+      const schemaChanges = {}; // tableId -> { from, to }
+      if (!isGroupDrag && schemas.length > 0) {
         bulkSelectedElements.forEach((el) => {
           if (el.type !== ObjectType.TABLE) return;
           const table = tables.find((t) => t.id === el.id);
@@ -630,12 +719,88 @@ export default function Canvas() {
               relationships,
             ) /
               2;
-          const hit = schemaRects.find((s) => isPointInRect(cx, cy, s.rect));
-          if (hit && table.schemaId !== hit.id) {
-            schemaChanges[el.id] = { from: table.schemaId ?? null, to: hit.id };
+          const to = findContainingSchemaId(cx, cy) ?? null;
+          const from = table.schemaId ?? null;
+          if (to !== from) schemaChanges[el.id] = { from, to };
+        });
+      }
+
+      // Post-drag view (final coords + new schemaIds) used to size boxes.
+      const finalTables = tables.map((t) => {
+        const el = bulkSelectedElements.find(
+          (b) => b.type === ObjectType.TABLE && b.id === t.id,
+        );
+        const change = schemaChanges[t.id];
+        if (!el && !change) return t;
+        return {
+          ...t,
+          ...(el ? { x: el.currentCoords.x, y: el.currentCoords.y } : {}),
+          ...(change ? { schemaId: change.to } : {}),
+        };
+      });
+
+      // Box geometry changes: a group drag translates the box; otherwise grow
+      // (never shrink) each affected schema to contain its members.
+      const schemaBoxChanges = {}; // sid -> { from, to } geometry
+      if (isGroupDrag) {
+        const el = bulkSelectedElements.find(
+          (b) => b.type === ObjectType.SCHEMA,
+        );
+        if (el) {
+          const s = schemas.find((sc) => sc.id === el.id);
+          const box = getSchemaBox(s, tables, settings, relationships);
+          if (box) {
+            schemaBoxChanges[el.id] = {
+              from: { ...box, x: el.initialCoords.x, y: el.initialCoords.y },
+              to: { ...box, x: el.currentCoords.x, y: el.currentCoords.y },
+            };
+          }
+        }
+      } else {
+        const affected = new Set();
+        bulkSelectedElements.forEach((el) => {
+          if (el.type !== ObjectType.TABLE) return;
+          const finalSid = schemaChanges[el.id]
+            ? schemaChanges[el.id].to
+            : (tables.find((t) => t.id === el.id)?.schemaId ?? null);
+          if (finalSid) affected.add(finalSid);
+        });
+        affected.forEach((sid) => {
+          const s = schemas.find((sc) => sc.id === sid);
+          const storedBox = getSchemaBox(s, tables, settings, relationships);
+          const derived = getSchemaRect(sid, finalTables, settings, relationships);
+          const grown = unionRect(storedBox, derived);
+          if (!grown) return;
+          const from = storedBox ?? { ...grown };
+          if (
+            from.x !== grown.x ||
+            from.y !== grown.y ||
+            from.width !== grown.width ||
+            from.height !== grown.height
+          ) {
+            schemaBoxChanges[sid] = { from, to: { ...grown } };
           }
         });
       }
+
+      const elements = bulkSelectedElements
+        .filter((el) => el.type !== ObjectType.SCHEMA)
+        .map((el) => {
+          const change = schemaChanges[el.id];
+          return {
+            id: el.id,
+            type: el.type,
+            undo: change
+              ? { ...el.initialCoords, schemaId: change.from }
+              : el.initialCoords,
+            redo: change
+              ? { ...el.currentCoords, schemaId: change.to }
+              : el.currentCoords,
+          };
+        });
+      const schemaBoxes = Object.entries(schemaBoxChanges).map(
+        ([sid, c]) => ({ sid, undo: c.from, redo: c.to }),
+      );
 
       setUndoStack((prev) => [
         ...prev,
@@ -643,19 +808,8 @@ export default function Canvas() {
           action: Action.MOVE,
           bulk: true,
           message: t("bulk_update"),
-          elements: bulkSelectedElements.map((el) => {
-            const change = schemaChanges[el.id];
-            return {
-              id: el.id,
-              type: el.type,
-              undo: change
-                ? { ...el.initialCoords, schemaId: change.from }
-                : el.initialCoords,
-              redo: change
-                ? { ...el.currentCoords, schemaId: change.to }
-                : el.currentCoords,
-            };
-          }),
+          elements,
+          ...(schemaBoxes.length ? { schemaBoxes } : {}),
         },
       ]);
       setRedoStack([]);
@@ -666,14 +820,16 @@ export default function Canvas() {
         })),
       );
 
-      // Positions were already applied during the drag; apply the membership
-      // changes now (the undo entry above already records them).
+      // Positions were applied live during the drag; apply membership + box
+      // geometry now (the undo entry above already records them).
       Object.entries(schemaChanges).forEach(([id, change]) => {
         updateTable(id, { schemaId: change.to });
       });
+      schemaBoxes.forEach(({ sid, redo }) => updateSchema(sid, redo));
     }
 
     if (dropTargetSchemaIds.length > 0) setDropTargetSchemaIds([]);
+    if (exitSchemaIds.length > 0) setExitSchemaIds([]);
 
     // Grabbing a schema temporarily puts all its member tables in the bulk
     // selection (so the group moves together). Clear it on pointer-up — whether
@@ -737,6 +893,39 @@ export default function Canvas() {
       width: 0,
       height: 0,
     });
+
+    if (schemaResize.id) {
+      const schema = schemas.find((s) => s.id === schemaResize.id);
+      const initBox = schemaResizeRef.current.initBox;
+      const finalBox = getSchemaBox(schema, tables, settings, relationships);
+      const changed =
+        initBox &&
+        finalBox &&
+        (initBox.x !== finalBox.x ||
+          initBox.y !== finalBox.y ||
+          initBox.width !== finalBox.width ||
+          initBox.height !== finalBox.height);
+      if (changed) {
+        setUndoStack((prev) => [
+          ...prev,
+          {
+            action: Action.EDIT,
+            element: ObjectType.SCHEMA,
+            sid: schemaResize.id,
+            undo: { ...initBox },
+            redo: { ...finalBox },
+            message: t("edit_schema", {
+              schemaName: schema.name,
+              extra: "[resize]",
+            }),
+          },
+        ]);
+        setRedoStack([]);
+        setSaveState(State.SAVING);
+      }
+      setSchemaResize({ id: null, dir: "none" });
+      schemaResizeRef.current = { initBox: null, minRect: null };
+    }
   };
 
   const handleGripField = () => {
@@ -929,54 +1118,41 @@ export default function Canvas() {
           {relationships.map((e) => (
             <Relationship key={e.id} data={e} />
           ))}
-          {(() => {
-            // Weave schema group outlines into the tables in array order: each
-            // schema's box is rendered right before its first member table, so
-            // earlier tables sit under the outline and members + later tables
-            // paint on top of it.
-            const schemasById = Object.fromEntries(
-              schemas.map((s) => [s.id, s]),
-            );
-            const renderedSchemas = new Set();
-            const nodes = [];
-            tables.forEach((table) => {
-              const schema = table.schemaId
-                ? schemasById[table.schemaId]
-                : null;
-              if (schema && !schema.hidden && !renderedSchemas.has(schema.id)) {
-                renderedSchemas.add(schema.id);
-                nodes.push(
-                  <SchemaGroup
-                    key={`schema_${schema.id}`}
-                    schema={schema}
-                    isDropTarget={dropTargetSchemaIds.includes(schema.id)}
-                    onPointerDown={() => {
-                      elementPointerDown = {
-                        element: schema,
-                        type: ObjectType.SCHEMA,
-                      };
-                    }}
-                  />,
-                );
-              }
-              nodes.push(
-                <Table
-                  key={table.id}
-                  tableData={table}
-                  setHoveredTable={setHoveredTable}
-                  handleGripField={handleGripField}
-                  setLinkingLine={setLinkingLine}
-                  onPointerDown={() => {
-                    elementPointerDown = {
-                      element: table,
-                      type: ObjectType.TABLE,
-                    };
-                  }}
-                />,
-              );
-            });
-            return nodes;
-          })()}
+          {/* Schema boxes render as a layer beneath all tables, so their
+              translucent bodies can capture clicks/drags on empty interior
+              without ever stealing pointer events from the tables on top. */}
+          {schemas
+            .filter((s) => !s.hidden)
+            .map((s) => (
+              <SchemaGroup
+                key={`schema_${s.id}`}
+                schema={s}
+                isDropTarget={dropTargetSchemaIds.includes(s.id)}
+                isExitTarget={exitSchemaIds.includes(s.id)}
+                onResizeStart={handleSchemaResizeStart}
+                onPointerDown={() => {
+                  elementPointerDown = {
+                    element: s,
+                    type: ObjectType.SCHEMA,
+                  };
+                }}
+              />
+            ))}
+          {tables.map((table) => (
+            <Table
+              key={table.id}
+              tableData={table}
+              setHoveredTable={setHoveredTable}
+              handleGripField={handleGripField}
+              setLinkingLine={setLinkingLine}
+              onPointerDown={() => {
+                elementPointerDown = {
+                  element: table,
+                  type: ObjectType.TABLE,
+                };
+              }}
+            />
+          ))}
           {linking && (
             <path
               d={`M ${linkingLine.startX} ${linkingLine.startY} L ${linkingLine.endX} ${linkingLine.endY}`}

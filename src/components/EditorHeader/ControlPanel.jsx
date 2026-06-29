@@ -166,6 +166,12 @@ export default function ControlPanel({
           updateNote(element.id, element.undo);
         }
       }
+      // Schema box geometry (group-drag translate / drop-time auto-grow).
+      if (a.schemaBoxes) {
+        for (const box of a.schemaBoxes) {
+          updateSchema(box.sid, box.undo);
+        }
+      }
       setRedoStack((prev) => [...prev, a]);
       return;
     }
@@ -373,6 +379,11 @@ export default function ControlPanel({
           updateArea(element.id, element.redo);
         } else if (element.type === ObjectType.NOTE) {
           updateNote(element.id, element.redo);
+        }
+      }
+      if (a.schemaBoxes) {
+        for (const box of a.schemaBoxes) {
+          updateSchema(box.sid, box.redo);
         }
       }
       setUndoStack((prev) => [...prev, a]);

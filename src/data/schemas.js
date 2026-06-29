@@ -87,6 +87,10 @@ export const schemaSchema = {
     name: { type: "string" },
     color: { type: "string", pattern: "^#[0-9a-fA-F]{6}$" },
     hidden: { type: "boolean" },
+    x: { type: "number" },
+    y: { type: "number" },
+    width: { type: "number" },
+    height: { type: "number" },
   },
   required: ["id", "name", "color"],
 };

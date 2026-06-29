@@ -1,11 +1,8 @@
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
+import { useHover } from "usehooks-ts";
 import { useDiagram, useSettings, useSelect, useLayout } from "../../hooks";
 import { ObjectType, Tab } from "../../data/constants";
-import {
-  getSchemaRect,
-  schemaGroupTitleHeight,
-  schemaGroupPadding,
-} from "../../utils/utils";
+import { getSchemaBox } from "../../utils/utils";
 
 export function CylinderIcon({ color, size = 14 }) {
   return (
@@ -26,25 +23,32 @@ export function CylinderIcon({ color, size = 14 }) {
 }
 
 /*
- * A schema's box is fully derived from its member tables (see getSchemaRect) —
- * it has no stored position/size and is never resized. The outline ignores
- * pointer events so tables on top stay interactive and clicks on empty space
- * inside still start a marquee; only the title bar is grabbable (starts a
- * group drag via the onPointerDown handler supplied by Canvas).
+ * A schema's box has its own stored geometry { x, y, width, height } (with a
+ * table-derived fallback for legacy schemas — see getSchemaBox). It behaves
+ * like a subject Area: the translucent body captures pointer events so clicking
+ * it selects the schema and dragging it moves the whole group, while member
+ * tables — painted in a layer above all boxes — stay individually interactive.
+ * Hovering shows a dashed outline + corner resize handles. Membership is
+ * decided spatially when a table is dropped (handled in Canvas), so the box no
+ * longer follows its tables.
  */
 export default function SchemaGroup({
   schema,
   onPointerDown,
+  onResizeStart,
   isDropTarget = false,
+  isExitTarget = false,
 }) {
+  const ref = useRef(null);
+  const isHovered = useHover(ref);
   const { tables, relationships } = useDiagram();
   const { settings } = useSettings();
   const { layout } = useLayout();
   const { selectedElement, setSelectedElement } = useSelect();
 
   const rect = useMemo(
-    () => getSchemaRect(schema.id, tables, settings, relationships),
-    [schema.id, tables, settings, relationships],
+    () => getSchemaBox(schema, tables, settings, relationships),
+    [schema, tables, settings, relationships],
   );
 
   // Double-click opens the schema's row in the left panel (mirrors tables).
@@ -76,45 +80,89 @@ export default function SchemaGroup({
     selectedElement.element === ObjectType.SCHEMA &&
     selectedElement.id === schema.id;
 
+  // Blue accent for drop-target/hover/select; otherwise the schema's own color.
+  // `isExitTarget` (a table being dragged out) wins only when it isn't also the
+  // drop endpoint, and shows a lighter, dashed shade in the schema's own color.
+  const exiting = isExitTarget && !isDropTarget;
+  const accent = isDropTarget || isHovered || isSelected;
+  const dashed = isDropTarget || exiting || isHovered;
+  const fillAlpha = isDropTarget ? "99" : exiting ? "33" : "66";
+
   return (
-    <g>
-      <rect
-        x={rect.x}
-        y={rect.y}
-        width={rect.width}
-        height={rect.height}
-        rx={16}
-        ry={16}
-        fill={`${schema.color}${isDropTarget ? "99" : "66"}`}
-        stroke={isDropTarget || isSelected ? "#3b82f6" : schema.color}
-        strokeWidth={isDropTarget || isSelected ? 3 : 2}
-        strokeDasharray={isDropTarget ? "8 5" : undefined}
-        style={{
-          pointerEvents: "none",
-          transition: "fill 0.1s ease",
-          filter: isDropTarget
-            ? "drop-shadow(0 0 6px rgba(59, 130, 246, 0.6))"
-            : undefined,
-        }}
-      />
-      {/* Full-width title band above the tables — the grab handle for dragging
-          the whole group. Label is top-padded to match note/area labels. */}
+    <g ref={ref}>
       <foreignObject
         x={rect.x}
         y={rect.y}
-        width={rect.width}
-        height={schemaGroupTitleHeight + schemaGroupPadding}
+        width={rect.width > 0 ? rect.width : 0}
+        height={rect.height > 0 ? rect.height : 0}
+        onPointerDown={onPointerDown}
       >
         <div
-          onPointerDown={onPointerDown}
           onDoubleClick={openEditor}
-          className="flex items-start gap-1 px-3 pt-2 select-none cursor-move w-full h-full"
-          style={{ color: schema.color, fontWeight: 600 }}
+          className={`w-full h-full rounded-2xl cursor-move border-2 ${
+            dashed ? "border-dashed" : "border-solid"
+          }`}
+          style={{
+            backgroundColor: `${schema.color}${fillAlpha}`,
+            borderColor: accent ? "#3b82f6" : schema.color,
+            borderWidth: accent ? 3 : 2,
+            transition: "background-color 0.1s ease",
+            filter: isDropTarget
+              ? "drop-shadow(0 0 6px rgba(59, 130, 246, 0.6))"
+              : undefined,
+          }}
         >
-          <CylinderIcon color={schema.color} size={15} />
-          <span className="truncate">{schema.name}</span>
+          <div
+            className="flex items-center gap-1 px-3 pt-2 select-none min-w-0"
+            style={{ color: schema.color, fontWeight: 600 }}
+          >
+            <CylinderIcon color={schema.color} size={15} />
+            <span className="truncate">{schema.name}</span>
+          </div>
         </div>
       </foreignObject>
+      {/* Corner resize handles. The box can be grown freely and shrunk down to
+          a snug fit around its tables (clamped in Canvas). Shown on hover or
+          while selected, mirroring subject areas. */}
+      {(isHovered || isSelected) && !layout.readOnly && onResizeStart && (
+        <>
+          {[
+            { dir: "tl", cx: rect.x, cy: rect.y, cursor: "nwse-resize" },
+            {
+              dir: "tr",
+              cx: rect.x + rect.width,
+              cy: rect.y,
+              cursor: "nesw-resize",
+            },
+            {
+              dir: "bl",
+              cx: rect.x,
+              cy: rect.y + rect.height,
+              cursor: "nesw-resize",
+            },
+            {
+              dir: "br",
+              cx: rect.x + rect.width,
+              cy: rect.y + rect.height,
+              cursor: "nwse-resize",
+            },
+          ].map((h) => (
+            <circle
+              key={h.dir}
+              cx={h.cx}
+              cy={h.cy}
+              r={6}
+              fill={settings.mode === "light" ? "white" : "rgb(28, 31, 35)"}
+              stroke="#5891db"
+              strokeWidth={2}
+              cursor={h.cursor}
+              onPointerDown={(e) =>
+                e.isPrimary && onResizeStart(e, schema.id, h.dir)
+              }
+            />
+          ))}
+        </>
+      )}
     </g>
   );
 }

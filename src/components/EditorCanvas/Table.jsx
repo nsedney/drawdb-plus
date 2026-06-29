@@ -213,7 +213,7 @@ export default function Table({
       if (selectedElement.currentTab !== Tab.TABLES) return;
       document
         .getElementById(`scroll_table_${tableData.id}`)
-        .scrollIntoView({ behavior: "smooth" });
+        ?.scrollIntoView({ behavior: "smooth" });
     }
   };
 

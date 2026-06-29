@@ -1,6 +1,7 @@
 import { Parser } from "@dbml/core";
 import { arrangeTables } from "../arrangeTables";
 import { Cardinality, Constraint, defaultBlue } from "../../data/constants";
+import { getSchemaRect } from "../utils";
 import { nanoid } from "nanoid";
 
 const parser = new Parser();
@@ -140,6 +141,15 @@ export function fromDBML(src) {
   const diagram = { tables, enums, relationships, schemas };
 
   arrangeTables(diagram);
+
+  // Give each imported schema a stored box around its (now arranged) members,
+  // matching the default render, so it behaves like any other schema box
+  // (movable/resizable, membership decided spatially) from the first interaction.
+  const settings = { tableWidth: 220, showComments: true };
+  for (const schema of schemas) {
+    const rect = getSchemaRect(schema.id, tables, settings, relationships);
+    if (rect) Object.assign(schema, rect);
+  }
 
   return diagram;
 }

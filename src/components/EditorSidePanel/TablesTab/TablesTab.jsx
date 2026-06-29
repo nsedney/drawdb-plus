@@ -26,15 +26,24 @@ export default function TablesTab() {
   const { t } = useTranslation();
   const { layout } = useLayout();
   const { setSaveState } = useSaveState();
-  const [openSchemaIds, setOpenSchemaIds] = useState([]);
+  const [openSchemaId, setOpenSchemaId] = useState("");
 
-  // Expand a schema in the panel when it's opened from the canvas, without
-  // collapsing any others that are already open.
+  // Exactly one schema open at a time. Opening a schema (or opening a table —
+  // e.g. double-clicking it on the canvas) expands the relevant schema and
+  // collapses the others, so the table's card is mounted and can expand. Driven
+  // only by selection changes, so manually collapsing a schema isn't undone by
+  // unrelated edits.
   useEffect(() => {
     if (selectedElement.element === ObjectType.SCHEMA && selectedElement.open) {
-      const id = `${selectedElement.id}`;
-      setOpenSchemaIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+      setOpenSchemaId(`${selectedElement.id}`);
+    } else if (
+      selectedElement.element === ObjectType.TABLE &&
+      selectedElement.open
+    ) {
+      const tb = tables.find((t) => t.id === selectedElement.id);
+      setOpenSchemaId(tb?.schemaId ? `${tb.schemaId}` : "");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedElement.element, selectedElement.id, selectedElement.open]);
 
   const ungrouped = tables.filter((tb) => !tb.schemaId);
@@ -88,13 +97,15 @@ export default function TablesTab() {
             {t("schemas")}
           </div>
           <Collapse
-            activeKey={openSchemaIds}
+            activeKey={openSchemaId ? [openSchemaId] : []}
             keepDOM={false}
             lazyRender
             onChange={(k) => {
               const next = Array.isArray(k) ? k : k ? [k] : [];
-              const opened = next.find((id) => !openSchemaIds.includes(id));
-              setOpenSchemaIds(next);
+              // The newly clicked key (if any) is the one not already open;
+              // otherwise the open panel was clicked to collapse it.
+              const opened = next.find((id) => id !== openSchemaId);
+              setOpenSchemaId(opened || "");
               if (opened) {
                 setSelectedElement((prev) => ({
                   ...prev,

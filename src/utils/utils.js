@@ -270,9 +270,11 @@ export function isTableHidden(table, schemas) {
 export const schemaGroupTitleHeight = 26;
 export const schemaGroupPadding = 16;
 
-// A schema's box is derived from its (visible) member tables' bounding box,
-// plus padding and room at the top for the title bar. Returns null if the
-// schema has no visible members (empty schemas don't render).
+// The table-derived bounding box of a schema's (visible) members, plus padding
+// and room at the top for the title bar. This is the *minimum* a schema box
+// must contain (used as the resize floor, the auto-grow target, and the
+// fallback box for legacy schemas without stored geometry). Returns null when
+// the schema has no visible members.
 export function getSchemaRect(schemaId, tables, settings, relationships = []) {
   const members = tables.filter((t) => t.schemaId === schemaId && !t.hidden);
   if (members.length === 0) return null;
@@ -301,4 +303,34 @@ export function getSchemaRect(schemaId, tables, settings, relationships = []) {
     width: maxX - minX + schemaGroupPadding * 2,
     height: maxY - minY + top + schemaGroupPadding,
   };
+}
+
+// The box actually drawn for a schema: its stored geometry when present,
+// otherwise the table-derived rect (legacy/imported schemas before first
+// interaction). Returns null when there's nothing to draw.
+export function getSchemaBox(schema, tables, settings, relationships = []) {
+  if (
+    schema &&
+    Number.isFinite(schema.width) &&
+    Number.isFinite(schema.height)
+  ) {
+    return {
+      x: schema.x,
+      y: schema.y,
+      width: schema.width,
+      height: schema.height,
+    };
+  }
+  return getSchemaRect(schema.id, tables, settings, relationships);
+}
+
+// Smallest rect containing both inputs (grow-only union). Either may be null.
+export function unionRect(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  const right = Math.max(a.x + a.width, b.x + b.width);
+  const bottom = Math.max(a.y + a.height, b.y + b.height);
+  return { x, y, width: right - x, height: bottom - y };
 }

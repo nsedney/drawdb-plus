@@ -1,22 +1,30 @@
 import { createContext, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { nanoid } from "nanoid";
-import { Action, ObjectType, defaultBlue } from "../data/constants";
-import { useSelect, useUndoRedo } from "../hooks";
+import {
+  Action,
+  ObjectType,
+  defaultBlue,
+  defaultSchemaSize,
+} from "../data/constants";
+import { useSelect, useUndoRedo, useTransform } from "../hooks";
 
 export const SchemasContext = createContext(null);
 
 /*
- * Schemas are first-class objects { id (nanoid), name, color, hidden }. They
- * have no position/size — a schema's box on the canvas is always derived from
- * its member tables (tables reference it via `schemaId`). Unlike areas/notes,
- * schema ids are stable nanoid strings, so we never reindex them.
+ * Schemas are first-class objects { id (nanoid), name, color, hidden } with a
+ * stored canvas box { x, y, width, height }. The box is independent of the
+ * member tables (tables reference the schema via `schemaId`); it is moved,
+ * resized, and grown explicitly, and table membership is decided spatially on
+ * drop. Unlike areas/notes, schema ids are stable nanoid strings, so we never
+ * reindex them.
  */
 export default function SchemasContextProvider({ children }) {
   const { t } = useTranslation();
   const [schemas, setSchemas] = useState([]);
   const { selectedElement, setSelectedElement } = useSelect();
   const { setUndoStack, setRedoStack } = useUndoRedo();
+  const { transform } = useTransform();
 
   const addSchema = (data, addToHistory = true) => {
     const newSchema = data ?? {
@@ -24,6 +32,10 @@ export default function SchemasContextProvider({ children }) {
       name: `schema_${schemas.length}`,
       color: defaultBlue,
       hidden: false,
+      x: transform.pan.x - defaultSchemaSize.width / 2,
+      y: transform.pan.y - defaultSchemaSize.height / 2,
+      width: defaultSchemaSize.width,
+      height: defaultSchemaSize.height,
     };
     setSchemas((prev) => [...prev, newSchema]);
     if (addToHistory) {

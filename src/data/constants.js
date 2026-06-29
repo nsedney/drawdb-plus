@@ -24,6 +24,8 @@ export const tableFieldHeight = 36;
 export const tableColorStripHeight = 7;
 export const pngExportPixelRatio = 4;
 export const minAreaSize = 120;
+export const minSchemaSize = 120;
+export const defaultSchemaSize = { width: 220, height: 160 };
 
 export const Cardinality = {
   ONE_TO_ONE: "one_to_one",
