@@ -97,7 +97,6 @@ const en = {
     add_schema: "Add schema",
     schema: "Schema",
     schemas: "Schemas",
-    no_schema: "No schema",
     remove_from_schema: "Remove from schema",
     create_schema: "Create schema",
     delete_schema: "Delete schema {{schemaName}}",

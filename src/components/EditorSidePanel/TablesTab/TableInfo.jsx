@@ -16,10 +16,18 @@ import {
   useLayout,
   useSaveState,
   useSchemas,
+  useSettings,
   useUndoRedo,
 } from "../../../hooks";
 import { CylinderIcon } from "../../EditorCanvas/SchemaGroup";
-import { Action, ObjectType, State, DB } from "../../../data/constants";
+import {
+  Action,
+  ObjectType,
+  State,
+  DB,
+  defaultBlue,
+} from "../../../data/constants";
+import { getSchemaBox, getSchemaRect, unionRect } from "../../../utils/utils";
 import TableField from "./TableField";
 import IndexDetails from "./IndexDetails";
 import UniqueConstraintDetails from "./UniqueConstraintDetails";
@@ -28,15 +36,16 @@ import { SortableList } from "../../SortableList/SortableList";
 import { nanoid } from "nanoid";
 
 export default function TableInfo({ data }) {
-  const { tables, database } = useDiagram();
+  const { tables, database, relationships } = useDiagram();
   const { t } = useTranslation();
   const [indexActiveKey, setIndexActiveKey] = useState("");
   const [uniqueActiveKey, setUniqueActiveKey] = useState("");
   const [commentActiveKey, setCommentActiveKey] = useState("");
   const [showComment, setShowComment] = useState(false);
   const { layout } = useLayout();
+  const { settings } = useSettings();
   const { deleteTable, updateTable, setTables } = useDiagram();
-  const { schemas, addSchema } = useSchemas();
+  const { schemas, addSchema, updateSchema } = useSchemas();
   const { setUndoStack, setRedoStack } = useUndoRedo();
   const { setSaveState } = useSaveState();
   const [editField, setEditField] = useState({});
@@ -44,24 +53,77 @@ export default function TableInfo({ data }) {
 
   const assignSchema = (schemaId) => {
     if (schemaId === (data.schemaId ?? null)) return;
+    const from = data.schemaId ?? null;
+
+    // Joining a schema grows its box (grow-only) to contain the table at its
+    // current canvas position — we never reposition the table, matching the
+    // canvas drop behavior. Removing from a schema leaves boxes untouched.
+    let boxChange = null;
+    const target = schemaId ? schemas.find((s) => s.id === schemaId) : null;
+    if (target) {
+      const tablesAfter = tables.map((t) =>
+        t.id === data.id ? { ...t, schemaId } : t,
+      );
+      const derived = getSchemaRect(
+        schemaId,
+        tablesAfter,
+        settings,
+        relationships,
+      );
+      const storedBox = getSchemaBox(target, tables, settings, relationships);
+      const grown = unionRect(storedBox, derived);
+      if (
+        grown &&
+        storedBox &&
+        (grown.x !== storedBox.x ||
+          grown.y !== storedBox.y ||
+          grown.width !== storedBox.width ||
+          grown.height !== storedBox.height)
+      ) {
+        boxChange = { sid: schemaId, undo: storedBox, redo: grown };
+      }
+    }
+
+    // One undoable step (reuses the bulk MOVE path: `elements` via updateTable,
+    // `schemaBoxes` via updateSchema) so undo reverts membership + box together.
     setUndoStack((prev) => [
       ...prev,
       {
-        action: Action.EDIT,
-        element: ObjectType.TABLE,
-        component: "self",
-        tid: data.id,
-        undo: { schemaId: data.schemaId ?? null },
-        redo: { schemaId },
+        action: Action.MOVE,
+        bulk: true,
         message: t("edit_table", { tableName: data.name, extra: "[schema]" }),
+        elements: [
+          {
+            id: data.id,
+            type: ObjectType.TABLE,
+            undo: { schemaId: from },
+            redo: { schemaId },
+          },
+        ],
+        ...(boxChange ? { schemaBoxes: [boxChange] } : {}),
       },
     ]);
     setRedoStack([]);
     updateTable(data.id, { schemaId });
+    if (boxChange) updateSchema(boxChange.sid, boxChange.redo);
   };
 
   const createAndAssignSchema = () => {
-    const created = addSchema();
+    // Create the new schema with a box already fitted around this table, so it
+    // encloses the table without a separate grow step.
+    const fitted = getSchemaRect(
+      "tmp",
+      tables.map((t) => (t.id === data.id ? { ...t, schemaId: "tmp" } : t)),
+      settings,
+      relationships,
+    );
+    const created = addSchema({
+      id: nanoid(),
+      name: `schema_${schemas.length}`,
+      color: defaultBlue,
+      hidden: false,
+      ...fitted,
+    });
     assignSchema(created.id);
   };
 

@@ -1118,41 +1118,59 @@ export default function Canvas() {
           {relationships.map((e) => (
             <Relationship key={e.id} data={e} />
           ))}
-          {/* Schema boxes render as a layer beneath all tables, so their
-              translucent bodies can capture clicks/drags on empty interior
-              without ever stealing pointer events from the tables on top. */}
-          {schemas
-            .filter((s) => !s.hidden)
-            .map((s) => (
-              <SchemaGroup
-                key={`schema_${s.id}`}
-                schema={s}
-                isDropTarget={dropTargetSchemaIds.includes(s.id)}
-                isExitTarget={exitSchemaIds.includes(s.id)}
-                onResizeStart={handleSchemaResizeStart}
+          {/* Each schema is a self-contained z-layer: its box paints right
+              before its own member tables, so a schema in front visually
+              overlays (and intentionally captures clicks over) the tables and
+              boxes behind it, while its own tables stay on top of its box.
+              Ungrouped tables paint first (at the back); reordering schemas
+              reorders their layers. The `tables` array is left untouched so
+              data/export order stays stable. */}
+          {(() => {
+            const renderTable = (table) => (
+              <Table
+                key={table.id}
+                tableData={table}
+                setHoveredTable={setHoveredTable}
+                handleGripField={handleGripField}
+                setLinkingLine={setLinkingLine}
                 onPointerDown={() => {
                   elementPointerDown = {
-                    element: s,
-                    type: ObjectType.SCHEMA,
+                    element: table,
+                    type: ObjectType.TABLE,
                   };
                 }}
               />
-            ))}
-          {tables.map((table) => (
-            <Table
-              key={table.id}
-              tableData={table}
-              setHoveredTable={setHoveredTable}
-              handleGripField={handleGripField}
-              setLinkingLine={setLinkingLine}
-              onPointerDown={() => {
-                elementPointerDown = {
-                  element: table,
-                  type: ObjectType.TABLE,
-                };
-              }}
-            />
-          ))}
+            );
+            const nodes = [];
+            // Ungrouped tables (and any orphaned schemaId) at the back.
+            tables
+              .filter((t) => !schemas.some((s) => s.id === t.schemaId))
+              .forEach((t) => nodes.push(renderTable(t)));
+            // Then each schema layer in panel order: box, then its members.
+            schemas.forEach((s) => {
+              if (!s.hidden) {
+                nodes.push(
+                  <SchemaGroup
+                    key={`schema_${s.id}`}
+                    schema={s}
+                    isDropTarget={dropTargetSchemaIds.includes(s.id)}
+                    isExitTarget={exitSchemaIds.includes(s.id)}
+                    onResizeStart={handleSchemaResizeStart}
+                    onPointerDown={() => {
+                      elementPointerDown = {
+                        element: s,
+                        type: ObjectType.SCHEMA,
+                      };
+                    }}
+                  />,
+                );
+              }
+              tables
+                .filter((t) => t.schemaId === s.id)
+                .forEach((t) => nodes.push(renderTable(t)));
+            });
+            return nodes;
+          })()}
           {linking && (
             <path
               d={`M ${linkingLine.startX} ${linkingLine.startY} L ${linkingLine.endX} ${linkingLine.endY}`}

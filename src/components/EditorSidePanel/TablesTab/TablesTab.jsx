@@ -21,7 +21,7 @@ import SchemaInfo from "./SchemaInfo";
 
 export default function TablesTab() {
   const { tables, addTable, setTables } = useDiagram();
-  const { schemas, addSchema } = useSchemas();
+  const { schemas, addSchema, setSchemas } = useSchemas();
   const { selectedElement, setSelectedElement } = useSelect();
   const { t } = useTranslation();
   const { layout } = useLayout();
@@ -116,14 +116,19 @@ export default function TablesTab() {
               }
             }}
           >
-            {schemas.map((s) => (
-              <SchemaListItem
-                key={s.id}
-                schema={s}
-                members={tables.filter((tb) => tb.schemaId === s.id)}
-                onReorder={(newOrder) => reorderWithin(s.id, newOrder)}
-              />
-            ))}
+            <SortableList
+              keyPrefix="schemas"
+              items={schemas}
+              onChange={(newSchemas) => setSchemas(newSchemas)}
+              afterChange={() => setSaveState(State.SAVING)}
+              renderItem={(s) => (
+                <SchemaListItem
+                  schema={s}
+                  members={tables.filter((tb) => tb.schemaId === s.id)}
+                  onReorder={(newOrder) => reorderWithin(s.id, newOrder)}
+                />
+              )}
+            />
           </Collapse>
         </div>
       )}
@@ -175,6 +180,7 @@ function SchemaListItem({ schema, members, onReorder }) {
   const { updateSchema } = useSchemas();
   const { selectedElement, setSelectedElement } = useSelect();
   const { setUndoStack, setRedoStack } = useUndoRedo();
+  const { layout } = useLayout();
   const { t } = useTranslation();
 
   const toggleHidden = (e) => {
@@ -204,6 +210,7 @@ function SchemaListItem({ schema, members, onReorder }) {
         header={
           <div className="flex items-center justify-between w-full min-w-0">
             <div className="flex items-center gap-2 flex-1 min-w-0">
+              <DragHandle readOnly={layout.readOnly} id={schema.id} />
               <CylinderIcon color={schema.color} />
               <div className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
                 {schema.name}
