@@ -48,7 +48,12 @@ import {
 import jsPDF from "jspdf";
 import { useHotkeys } from "react-hotkeys-hook";
 import { Validator } from "jsonschema";
-import { areaSchema, noteSchema, tableSchema } from "../../data/schemas";
+import {
+  areaSchema,
+  noteSchema,
+  tableSchema,
+  schemaSchema,
+} from "../../data/schemas";
 import { db } from "../../data/db";
 import {
   useLayout,
@@ -89,6 +94,10 @@ import { deleteFromCache, STORAGE_KEY } from "../../utils/cache";
 import { useLiveQuery } from "dexie-react-hooks";
 import { DateTime } from "luxon";
 import ConfigureCustomTypes from "./ConfigureCustomTypes";
+
+// Tags a multi-element clipboard payload so paste can tell it apart from a
+// legacy single-element copy. Payload: { type, elements:[{type,data}], relationships }.
+const CLIPBOARD_TYPE = "drawdb/clipboard";
 
 export default function ControlPanel({
   title,
@@ -143,7 +152,12 @@ export default function ControlPanel({
     useSchemas();
   const confirmDeleteSchema = useSchemaDelete();
   const { undoStack, redoStack, setUndoStack, setRedoStack } = useUndoRedo();
-  const { selectedElement, setSelectedElement } = useSelect();
+  const {
+    selectedElement,
+    setSelectedElement,
+    bulkSelectedElements,
+    setBulkSelectedElements,
+  } = useSelect();
   const { transform, setTransform } = useTransform();
   const { t, i18n } = useTranslation();
   const { version, gistId, setGistId } = useContext(IdContext);
@@ -157,6 +171,29 @@ export default function ControlPanel({
     setUndoStack((prev) => prev.filter((_, i) => i !== prev.length - 1));
 
     if (a.bulk) {
+      // Snapshot-based bulk op (delete / paste): restore the whole before state.
+      // `selectedElement` may point at a since-shifted area/note index, so clear
+      // it rather than leave the panel editing the wrong element.
+      if (a.bulkKind === "snapshot") {
+        setTables(a.undo.tables);
+        setRelationships(a.undo.relationships);
+        setAreas(a.undo.areas);
+        setNotes(a.undo.notes);
+        setSchemas(a.undo.schemas);
+        // The selection referenced elements that just changed en masse; clear it
+        // so nothing points at a removed/shifted element.
+        setSelectedElement((prev) => ({
+          ...prev,
+          element: ObjectType.NONE,
+          id: -1,
+          open: false,
+        }));
+        setBulkSelectedElements([]);
+        setRedoStack((prev) => [...prev, a]);
+        return;
+      }
+      // Per-element bulk move: element coords/membership, schema box geometry,
+      // and any schema created as part of the same action.
       for (const element of a.elements) {
         if (element.type === ObjectType.TABLE) {
           updateTable(element.id, element.undo);
@@ -166,11 +203,13 @@ export default function ControlPanel({
           updateNote(element.id, element.undo);
         }
       }
-      // Schema box geometry (group-drag translate / drop-time auto-grow).
       if (a.schemaBoxes) {
         for (const box of a.schemaBoxes) {
           updateSchema(box.sid, box.undo);
         }
+      }
+      if (a.createdSchemas) {
+        for (const s of a.createdSchemas) deleteSchema(s.id, false);
       }
       setRedoStack((prev) => [...prev, a]);
       return;
@@ -372,6 +411,24 @@ export default function ControlPanel({
     setRedoStack((prev) => prev.filter((e, i) => i !== prev.length - 1));
 
     if (a.bulk) {
+      if (a.bulkKind === "snapshot") {
+        setTables(a.redo.tables);
+        setRelationships(a.redo.relationships);
+        setAreas(a.redo.areas);
+        setNotes(a.redo.notes);
+        setSchemas(a.redo.schemas);
+        setSelectedElement((prev) => ({
+          ...prev,
+          element: ObjectType.NONE,
+          id: -1,
+          open: false,
+        }));
+        setUndoStack((prev) => [...prev, a]);
+        return;
+      }
+      if (a.createdSchemas) {
+        for (const s of a.createdSchemas) addSchema(s, false);
+      }
       for (const element of a.elements) {
         if (element.type === ObjectType.TABLE) {
           updateTable(element.id, element.redo);
@@ -731,89 +788,222 @@ export default function ControlPanel({
       }
     }
   };
-  const del = () => {
-    if (layout.readOnly) {
-      return;
+  // The copy/cut/delete target(s) as [{ type, id }]. Prefers the bulk selection
+  // (marquee / ctrl-click / a selected schema); falls back to the single
+  // selected element. A selected SCHEMA expands to include its member tables, so
+  // copying/deleting a schema acts on its whole contents (works whether it was
+  // selected on the canvas or from the panel).
+  //
+  // This is intentionally separate from Canvas's collectSelectedElements: that
+  // produces {id,type,currentCoords,initialCoords} for dragging, while these are
+  // lightweight {type,id} action targets. Both expand a schema the same way
+  // (schema + tables where schemaId === it); keep that rule in sync.
+  const getSelectedItems = () => {
+    let items = [];
+    if (bulkSelectedElements.length > 0) {
+      items = bulkSelectedElements.map((el) => ({ type: el.type, id: el.id }));
+    } else if (
+      [
+        ObjectType.TABLE,
+        ObjectType.AREA,
+        ObjectType.NOTE,
+        ObjectType.SCHEMA,
+      ].includes(selectedElement.element)
+    ) {
+      items = [{ type: selectedElement.element, id: selectedElement.id }];
     }
-    switch (selectedElement.element) {
-      case ObjectType.TABLE:
-        deleteTable(selectedElement.id);
-        break;
-      case ObjectType.NOTE:
-        deleteNote(selectedElement.id);
-        break;
-      case ObjectType.AREA:
-        deleteArea(selectedElement.id);
-        break;
-      case ObjectType.SCHEMA:
-        // Same prompt as the left-panel delete (ungroup / delete-with-tables /
-        // cancel).
-        confirmDeleteSchema(schemas.find((s) => s.id === selectedElement.id));
-        break;
-      default:
-        break;
+    const schemaIds = new Set(
+      items.filter((i) => i.type === ObjectType.SCHEMA).map((i) => i.id),
+    );
+    if (schemaIds.size > 0) {
+      const have = new Set(items.map((i) => `${i.type}:${i.id}`));
+      tables.forEach((tb) => {
+        if (schemaIds.has(tb.schemaId) && !have.has(`${ObjectType.TABLE}:${tb.id}`)) {
+          items.push({ type: ObjectType.TABLE, id: tb.id });
+        }
+      });
     }
+    return items;
   };
-  const duplicate = () => {
-    if (layout.readOnly) {
-      return;
-    }
-    switch (selectedElement.element) {
-      case ObjectType.TABLE: {
-        const copiedTable = tables.find((t) => t.id === selectedElement.id);
-        addTable({
-          table: {
-            ...copiedTable,
-            x: copiedTable.x + 20,
-            y: copiedTable.y + 20,
-            id: nanoid(),
-          },
-        });
-        break;
+
+  // Build the { elements, relationships } payload from the current selection.
+  // Only relationships whose endpoints are both copied are kept, so a paste
+  // never produces a dangling foreign key. Shared by copy() and duplicate().
+  const collectSelection = () => {
+    const items = getSelectedItems();
+    const elements = [];
+    const copiedTableIds = new Set();
+    items.forEach((item) => {
+      if (item.type === ObjectType.TABLE) {
+        const table = tables.find((t) => t.id === item.id);
+        if (table) {
+          elements.push({ type: ObjectType.TABLE, data: table });
+          copiedTableIds.add(table.id);
+        }
+      } else if (item.type === ObjectType.AREA) {
+        const area = areas.find((a) => a.id === item.id);
+        if (area) elements.push({ type: ObjectType.AREA, data: area });
+      } else if (item.type === ObjectType.NOTE) {
+        const note = notes.find((n) => n.id === item.id);
+        if (note) elements.push({ type: ObjectType.NOTE, data: note });
+      } else if (item.type === ObjectType.SCHEMA) {
+        const schema = schemas.find((s) => s.id === item.id);
+        if (schema) elements.push({ type: ObjectType.SCHEMA, data: schema });
       }
-      case ObjectType.NOTE:
-        addNote({
-          ...notes[selectedElement.id],
-          x: notes[selectedElement.id].x + 20,
-          y: notes[selectedElement.id].y + 20,
-          id: notes.length,
-        });
-        break;
-      case ObjectType.AREA:
-        addArea({
-          ...areas[selectedElement.id],
-          x: areas[selectedElement.id].x + 20,
-          y: areas[selectedElement.id].y + 20,
-          id: areas.length,
-        });
-        break;
-      default:
-        break;
-    }
+    });
+    const rels = relationships.filter(
+      (r) => copiedTableIds.has(r.startTableId) && copiedTableIds.has(r.endTableId),
+    );
+    return { elements, relationships: rels };
   };
+
   const copy = () => {
-    switch (selectedElement.element) {
-      case ObjectType.TABLE:
-        navigator.clipboard
-          .writeText(
-            JSON.stringify(tables.find((t) => t.id === selectedElement.id)),
-          )
-          .catch(() => Toast.error(t("oops_smth_went_wrong")));
-        break;
-      case ObjectType.NOTE:
-        navigator.clipboard
-          .writeText(JSON.stringify({ ...notes[selectedElement.id] }))
-          .catch(() => Toast.error(t("oops_smth_went_wrong")));
-        break;
-      case ObjectType.AREA:
-        navigator.clipboard
-          .writeText(JSON.stringify({ ...areas[selectedElement.id] }))
-          .catch(() => Toast.error(t("oops_smth_went_wrong")));
-        break;
-      default:
-        break;
-    }
+    const { elements, relationships: rels } = collectSelection();
+    if (elements.length === 0) return;
+    navigator.clipboard
+      .writeText(
+        JSON.stringify({ type: CLIPBOARD_TYPE, elements, relationships: rels }),
+      )
+      .catch(() => Toast.error(t("oops_smth_went_wrong")));
   };
+
+  // Recreate a copied set of elements offset by OFFSET, with fresh ids, as ONE
+  // atomic before/after snapshot (a single undo step). Schemas are built first
+  // so member tables can be remapped onto the new schema; tables before
+  // relationships so refs can be remapped onto the new tables. Leaves the whole
+  // pasted group selected so it can be dragged at once.
+  const pasteBulk = ({ elements, relationships: rels }) => {
+    const v = new Validator();
+    const OFFSET = 20;
+    const tableIdMap = {};
+    const schemaIdMap = {};
+    const fieldIdMap = {};
+    const newSelection = [];
+    const select = (id, type, x, y) =>
+      newSelection.push({
+        id,
+        type,
+        currentCoords: { x, y },
+        initialCoords: { x, y },
+      });
+
+    const newSchemas = [];
+    elements.forEach((el) => {
+      if (el.type === ObjectType.SCHEMA && v.validate(el.data, schemaSchema).valid) {
+        const id = nanoid();
+        schemaIdMap[el.data.id] = id;
+        const x = (el.data.x ?? 0) + OFFSET;
+        const y = (el.data.y ?? 0) + OFFSET;
+        newSchemas.push({ ...el.data, id, x, y });
+        select(id, ObjectType.SCHEMA, x, y);
+      }
+    });
+
+    const newTables = [];
+    elements.forEach((el) => {
+      if (el.type === ObjectType.TABLE && v.validate(el.data, tableSchema).valid) {
+        const id = nanoid();
+        tableIdMap[el.data.id] = id;
+        const x = el.data.x + OFFSET;
+        const y = el.data.y + OFFSET;
+        const schemaId =
+          el.data.schemaId != null ? (schemaIdMap[el.data.schemaId] ?? null) : null;
+        // Give fields fresh ids so pasted tables don't share field ids with
+        // their originals; record the mapping to remap relationship endpoints.
+        // (Indices/uniqueConstraints reference fields by name, so they're fine.)
+        const fields = (el.data.fields ?? []).map((f) => {
+          const fid = nanoid();
+          if (f.id != null) fieldIdMap[f.id] = fid;
+          return { ...f, id: fid };
+        });
+        newTables.push({ ...el.data, id, x, y, schemaId, fields });
+        select(id, ObjectType.TABLE, x, y);
+      }
+    });
+
+    // Areas and notes are index-addressed; new ids continue from the count.
+    const newAreas = [];
+    const newNotes = [];
+    elements.forEach((el) => {
+      if (el.type === ObjectType.AREA && v.validate(el.data, areaSchema).valid) {
+        const id = areas.length + newAreas.length;
+        const x = el.data.x + OFFSET;
+        const y = el.data.y + OFFSET;
+        newAreas.push({ ...el.data, id, x, y });
+        select(id, ObjectType.AREA, x, y);
+      } else if (
+        el.type === ObjectType.NOTE &&
+        v.validate(el.data, noteSchema).valid
+      ) {
+        const id = notes.length + newNotes.length;
+        const x = el.data.x + OFFSET;
+        const y = el.data.y + OFFSET;
+        newNotes.push({ ...el.data, id, x, y });
+        select(id, ObjectType.NOTE, x, y);
+      }
+    });
+
+    const newRels = [];
+    if (Array.isArray(rels)) {
+      rels.forEach((r) => {
+        const startTableId = tableIdMap[r.startTableId];
+        const endTableId = tableIdMap[r.endTableId];
+        if (startTableId === undefined || endTableId === undefined) return;
+        newRels.push({
+          ...r,
+          id: relationships.length + newRels.length,
+          startTableId,
+          endTableId,
+          startFieldId: fieldIdMap[r.startFieldId] ?? r.startFieldId,
+          endFieldId: fieldIdMap[r.endFieldId] ?? r.endFieldId,
+        });
+      });
+    }
+
+    if (
+      newSchemas.length === 0 &&
+      newTables.length === 0 &&
+      newAreas.length === 0 &&
+      newNotes.length === 0
+    ) {
+      return;
+    }
+
+    const before = { tables, relationships, areas, notes, schemas };
+    const after = {
+      tables: [...tables, ...newTables],
+      relationships: [...relationships, ...newRels],
+      areas: [...areas, ...newAreas],
+      notes: [...notes, ...newNotes],
+      schemas: [...schemas, ...newSchemas],
+    };
+    setTables(after.tables);
+    setRelationships(after.relationships);
+    setAreas(after.areas);
+    setNotes(after.notes);
+    setSchemas(after.schemas);
+    setUndoStack((prev) => [
+      ...prev,
+      {
+        action: Action.ADD,
+        bulk: true,
+        bulkKind: "snapshot",
+        undo: before,
+        redo: after,
+        message: t("bulk_paste"),
+      },
+    ]);
+    setRedoStack([]);
+
+    setSelectedElement((prev) => ({
+      ...prev,
+      element: ObjectType.NONE,
+      id: -1,
+      open: false,
+    }));
+    setBulkSelectedElements(newSelection);
+  };
+
   const paste = () => {
     if (layout.readOnly) {
       return;
@@ -825,6 +1015,11 @@ export default function ControlPanel({
       } catch (error) {
         return;
       }
+      if (obj && obj.type === CLIPBOARD_TYPE && Array.isArray(obj.elements)) {
+        pasteBulk(obj);
+        return;
+      }
+      // Backwards-compatible single-element paste.
       const v = new Validator();
       if (v.validate(obj, tableSchema).valid) {
         addTable({
@@ -842,7 +1037,7 @@ export default function ControlPanel({
           y: obj.y + 20,
           id: areas.length,
         });
-      } else if (v.validate(obj, noteSchema)) {
+      } else if (v.validate(obj, noteSchema).valid) {
         addNote({
           ...obj,
           x: obj.x + 20,
@@ -852,6 +1047,109 @@ export default function ControlPanel({
       }
     });
   };
+
+  const duplicate = () => {
+    if (layout.readOnly) {
+      return;
+    }
+    const payload = collectSelection();
+    if (payload.elements.length === 0) return;
+    pasteBulk(payload);
+  };
+
+  const del = () => {
+    if (layout.readOnly) {
+      return;
+    }
+    const items = getSelectedItems();
+    if (items.length === 0) return;
+
+    // Lone schema (only a schema + its own member tables): keep the prompt
+    // (ungroup / delete-with-tables / cancel) from the left-panel delete.
+    const schemaItems = items.filter((i) => i.type === ObjectType.SCHEMA);
+    if (schemaItems.length === 1) {
+      const sid = schemaItems[0].id;
+      const memberIds = new Set(
+        tables.filter((tb) => tb.schemaId === sid).map((tb) => tb.id),
+      );
+      const onlySchemaAndMembers = items.every(
+        (i) =>
+          (i.type === ObjectType.SCHEMA && i.id === sid) ||
+          (i.type === ObjectType.TABLE && memberIds.has(i.id)),
+      );
+      if (onlySchemaAndMembers) {
+        confirmDeleteSchema(schemas.find((s) => s.id === sid));
+        setBulkSelectedElements([]);
+        return;
+      }
+    }
+
+    // Single table/area/note: keep the per-type delete (its toast + own undo).
+    if (items.length === 1 && items[0].type !== ObjectType.SCHEMA) {
+      const { type, id } = items[0];
+      if (type === ObjectType.TABLE) deleteTable(id);
+      else if (type === ObjectType.AREA) deleteArea(id);
+      else if (type === ObjectType.NOTE) deleteNote(id);
+      setBulkSelectedElements([]);
+      return;
+    }
+
+    // Multi-select: delete everything as ONE atomic, single-undo operation via a
+    // before/after snapshot. A selected schema takes all its member tables with
+    // it (even ones not individually selected), and relationships drop when
+    // either endpoint is removed. Areas/notes are re-indexed after filtering.
+    const schemaIds = new Set(schemaItems.map((i) => i.id));
+    const tableIds = new Set(
+      items.filter((i) => i.type === ObjectType.TABLE).map((i) => i.id),
+    );
+    tables.forEach((tb) => {
+      if (schemaIds.has(tb.schemaId)) tableIds.add(tb.id);
+    });
+    const areaIds = new Set(
+      items.filter((i) => i.type === ObjectType.AREA).map((i) => i.id),
+    );
+    const noteIds = new Set(
+      items.filter((i) => i.type === ObjectType.NOTE).map((i) => i.id),
+    );
+
+    const before = { tables, relationships, areas, notes, schemas };
+    const after = {
+      tables: tables.filter((t) => !tableIds.has(t.id)),
+      relationships: relationships.filter(
+        (r) => !tableIds.has(r.startTableId) && !tableIds.has(r.endTableId),
+      ),
+      areas: areas.filter((a) => !areaIds.has(a.id)).map((a, i) => ({ ...a, id: i })),
+      notes: notes.filter((n) => !noteIds.has(n.id)).map((n, i) => ({ ...n, id: i })),
+      schemas: schemas.filter((s) => !schemaIds.has(s.id)),
+    };
+
+    setTables(after.tables);
+    setRelationships(after.relationships);
+    setAreas(after.areas);
+    setNotes(after.notes);
+    setSchemas(after.schemas);
+    setUndoStack((prev) => [
+      ...prev,
+      {
+        action: Action.DELETE,
+        bulk: true,
+        bulkKind: "snapshot",
+        undo: before,
+        redo: after,
+        message: t("bulk_delete"),
+      },
+    ]);
+    setRedoStack([]);
+    Toast.success(t("bulk_delete"));
+    setSelectedElement((prev) => ({
+      ...prev,
+      element: ObjectType.NONE,
+      id: -1,
+      open: false,
+    }));
+    setBulkSelectedElements([]);
+  };
+
   const cut = () => {
     if (layout.readOnly) {
       return;

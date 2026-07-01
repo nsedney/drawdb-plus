@@ -27,7 +27,11 @@ import {
   DB,
   defaultBlue,
 } from "../../../data/constants";
-import { getSchemaBox, getSchemaRect, unionRect } from "../../../utils/utils";
+import {
+  getSchemaBox,
+  getSchemaRect,
+  growSchemaBox,
+} from "../../../utils/utils";
 import TableField from "./TableField";
 import IndexDetails from "./IndexDetails";
 import UniqueConstraintDetails from "./UniqueConstraintDetails";
@@ -51,7 +55,9 @@ export default function TableInfo({ data }) {
   const [editField, setEditField] = useState({});
   const initialColorRef = useRef(data.color);
 
-  const assignSchema = (schemaId) => {
+  // `createdSchemas` (used by createAndAssignSchema) folds a just-created schema
+  // into this one undo entry, so undo removes both the assignment and the schema.
+  const assignSchema = (schemaId, createdSchemas = []) => {
     if (schemaId === (data.schemaId ?? null)) return;
     const from = data.schemaId ?? null;
 
@@ -64,14 +70,8 @@ export default function TableInfo({ data }) {
       const tablesAfter = tables.map((t) =>
         t.id === data.id ? { ...t, schemaId } : t,
       );
-      const derived = getSchemaRect(
-        schemaId,
-        tablesAfter,
-        settings,
-        relationships,
-      );
       const storedBox = getSchemaBox(target, tables, settings, relationships);
-      const grown = unionRect(storedBox, derived);
+      const grown = growSchemaBox(target, tablesAfter, settings, relationships);
       if (
         grown &&
         storedBox &&
@@ -84,13 +84,15 @@ export default function TableInfo({ data }) {
       }
     }
 
-    // One undoable step (reuses the bulk MOVE path: `elements` via updateTable,
-    // `schemaBoxes` via updateSchema) so undo reverts membership + box together.
+    // One undoable step (reuses the bulk-move path: `elements` via updateTable,
+    // `schemaBoxes` via updateSchema, `createdSchemas` via add/deleteSchema) so
+    // undo reverts membership + box + any created schema together.
     setUndoStack((prev) => [
       ...prev,
       {
         action: Action.MOVE,
         bulk: true,
+        bulkKind: "move",
         message: t("edit_table", { tableName: data.name, extra: "[schema]" }),
         elements: [
           {
@@ -101,6 +103,7 @@ export default function TableInfo({ data }) {
           },
         ],
         ...(boxChange ? { schemaBoxes: [boxChange] } : {}),
+        ...(createdSchemas.length ? { createdSchemas } : {}),
       },
     ]);
     setRedoStack([]);
@@ -110,21 +113,23 @@ export default function TableInfo({ data }) {
 
   const createAndAssignSchema = () => {
     // Create the new schema with a box already fitted around this table, so it
-    // encloses the table without a separate grow step.
+    // encloses the table without a separate grow step. Create without its own
+    // undo entry; assignSchema folds it into a single undoable step.
     const fitted = getSchemaRect(
       "tmp",
       tables.map((t) => (t.id === data.id ? { ...t, schemaId: "tmp" } : t)),
       settings,
       relationships,
     );
-    const created = addSchema({
+    const newSchema = {
       id: nanoid(),
       name: `schema_${schemas.length}`,
       color: defaultBlue,
       hidden: false,
       ...fitted,
-    });
-    assignSchema(created.id);
+    };
+    addSchema(newSchema, false);
+    assignSchema(newSchema.id, [newSchema]);
   };
 
   const handleColorPick = (color) => {

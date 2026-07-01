@@ -270,19 +270,29 @@ export function isTableHidden(table, schemas) {
 export const schemaGroupTitleHeight = 26;
 export const schemaGroupPadding = 16;
 
-// The table-derived bounding box of a schema's (visible) members, plus padding
-// and room at the top for the title bar. This is the *minimum* a schema box
-// must contain (used as the resize floor, the auto-grow target, and the
+// The box a single member table occupies inside a schema: its bounds plus
+// padding on all sides and room for the title band above. getSchemaRect is the
+// union of these; reuse this (rather than re-deriving the margins) whenever you
+// need the rect a not-yet-added table will require.
+export function schemaMemberRect(x, y, width, height) {
+  const top = schemaGroupPadding + schemaGroupTitleHeight;
+  return {
+    x: x - schemaGroupPadding,
+    y: y - top,
+    width: width + schemaGroupPadding * 2,
+    height: height + top + schemaGroupPadding,
+  };
+}
+
+// The table-derived bounding box of a schema's (visible) members. This is the
+// *minimum* a schema box must contain (resize floor, auto-grow target, and the
 // fallback box for legacy schemas without stored geometry). Returns null when
 // the schema has no visible members.
 export function getSchemaRect(schemaId, tables, settings, relationships = []) {
   const members = tables.filter((t) => t.schemaId === schemaId && !t.hidden);
   if (members.length === 0) return null;
 
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
+  let rect = null;
   for (const t of members) {
     const h = getTableHeight(
       t,
@@ -290,19 +300,9 @@ export function getSchemaRect(schemaId, tables, settings, relationships = []) {
       settings.showComments,
       relationships,
     );
-    minX = Math.min(minX, t.x);
-    minY = Math.min(minY, t.y);
-    maxX = Math.max(maxX, t.x + settings.tableWidth);
-    maxY = Math.max(maxY, t.y + h);
+    rect = unionRect(rect, schemaMemberRect(t.x, t.y, settings.tableWidth, h));
   }
-
-  const top = schemaGroupPadding + schemaGroupTitleHeight;
-  return {
-    x: minX - schemaGroupPadding,
-    y: minY - top,
-    width: maxX - minX + schemaGroupPadding * 2,
-    height: maxY - minY + top + schemaGroupPadding,
-  };
+  return rect;
 }
 
 // The box actually drawn for a schema: its stored geometry when present,
@@ -333,4 +333,14 @@ export function unionRect(a, b) {
   const right = Math.max(a.x + a.width, b.x + b.width);
   const bottom = Math.max(a.y + a.height, b.y + b.height);
   return { x, y, width: right - x, height: bottom - y };
+}
+
+// A schema's stored box grown (never shrunk) to contain all its current member
+// tables. Returns the box unchanged when it already contains them. Single home
+// for the "keep the box around its members" rule used after drops, membership
+// changes, and adds.
+export function growSchemaBox(schema, tables, settings, relationships = []) {
+  const stored = getSchemaBox(schema, tables, settings, relationships);
+  const derived = getSchemaRect(schema.id, tables, settings, relationships);
+  return unionRect(stored, derived) ?? stored;
 }

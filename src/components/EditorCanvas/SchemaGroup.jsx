@@ -44,7 +44,8 @@ export default function SchemaGroup({
   const { tables, relationships } = useDiagram();
   const { settings } = useSettings();
   const { layout } = useLayout();
-  const { selectedElement, setSelectedElement } = useSelect();
+  const { selectedElement, setSelectedElement, bulkSelectedElements } =
+    useSelect();
 
   const rect = useMemo(
     () => getSchemaBox(schema, tables, settings, relationships),
@@ -77,8 +78,11 @@ export default function SchemaGroup({
   if (!rect) return null;
 
   const isSelected =
-    selectedElement.element === ObjectType.SCHEMA &&
-    selectedElement.id === schema.id;
+    (selectedElement.element === ObjectType.SCHEMA &&
+      selectedElement.id === schema.id) ||
+    bulkSelectedElements.some(
+      (el) => el.type === ObjectType.SCHEMA && el.id === schema.id,
+    );
 
   // Blue accent for drop-target/hover/select; otherwise the schema's own color.
   // `isExitTarget` (a table being dragged out) wins only when it isn't also the

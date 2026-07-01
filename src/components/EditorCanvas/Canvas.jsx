@@ -37,7 +37,7 @@ import {
   getTableHeight,
   getSchemaRect,
   getSchemaBox,
-  unionRect,
+  growSchemaBox,
 } from "../../utils/utils";
 import {
   getRectFromEndpoints,
@@ -164,6 +164,31 @@ export default function Canvas() {
     return el1.id === el2.id && el1.type === el2.type;
   };
 
+  // The bulk-selection elements for a schema: the schema box itself plus all its
+  // member tables, in the {id,type,currentCoords,initialCoords} shape the
+  // move/copy/delete machinery uses. Single source for "selecting a schema
+  // selects its contents" (used by schema pointer-down and click-to-isolate).
+  const buildSchemaSelection = (schema) => {
+    const box = getSchemaBox(schema, tables, settings, relationships);
+    if (!box) return [];
+    return [
+      {
+        id: schema.id,
+        type: ObjectType.SCHEMA,
+        currentCoords: { x: box.x, y: box.y },
+        initialCoords: { x: box.x, y: box.y },
+      },
+      ...tables
+        .filter((t) => t.schemaId === schema.id)
+        .map((t) => ({
+          id: t.id,
+          type: ObjectType.TABLE,
+          currentCoords: { x: t.x, y: t.y },
+          initialCoords: { x: t.x, y: t.y },
+        })),
+    ];
+  };
+
   const collectSelectedElements = () => {
     const rect = getRectFromEndpoints(bulkSelectRect);
     const elements = [];
@@ -243,10 +268,37 @@ export default function Canvas() {
       }
     });
 
+    // A schema is included when its whole box falls inside the marquee; its
+    // member tables get picked up by the tables loop above (they sit inside the
+    // box), so the schema + its contents select together.
+    schemas.forEach((schema) => {
+      if (schema.hidden) return;
+      const box = getSchemaBox(schema, tables, settings, relationships);
+      if (!box) return;
+      const element = {
+        id: schema.id,
+        type: ObjectType.SCHEMA,
+        currentCoords: { x: box.x, y: box.y },
+        initialCoords: { x: box.x, y: box.y },
+      };
+      if (shouldAddElement(box, element)) {
+        elements.push(element);
+      }
+    });
+
     if (bulkSelectRect.ctrlKey || bulkSelectRect.metaKey) {
       setBulkSelectedElements([...bulkSelectedElements, ...elements]);
     } else {
       setBulkSelectedElements(elements);
+      // A fresh marquee replaces the selection — drop any lingering single
+      // selectedElement so a previously-selected element (e.g. a schema) no
+      // longer shows its selected ring.
+      setSelectedElement((prev) => ({
+        ...prev,
+        element: ObjectType.NONE,
+        id: -1,
+        open: false,
+      }));
     }
   };
 
@@ -268,21 +320,36 @@ export default function Canvas() {
       }));
       const box = getSchemaBox(element, tables, settings, relationships);
       if (!box) return;
-      const members = tables.filter((t) => t.schemaId === element.id);
-      setBulkSelectedElements([
-        {
-          id: element.id,
-          type: ObjectType.SCHEMA,
-          currentCoords: { x: box.x, y: box.y },
-          initialCoords: { x: box.x, y: box.y },
-        },
-        ...members.map((t) => ({
-          id: t.id,
-          type: ObjectType.TABLE,
-          currentCoords: { x: t.x, y: t.y },
-          initialCoords: { x: t.x, y: t.y },
-        })),
-      ]);
+      const selection = buildSchemaSelection(element);
+      const isSelected = bulkSelectedElements.some(
+        (el) => el.type === ObjectType.SCHEMA && el.id === element.id,
+      );
+      if (e.ctrlKey || e.metaKey) {
+        if (isSelected) {
+          // Ctrl/Cmd-click an already-selected schema removes it + its members.
+          const drop = new Set(selection.map((s) => `${s.type}:${s.id}`));
+          setBulkSelectedElements(
+            bulkSelectedElements.filter(
+              (el) => !drop.has(`${el.type}:${el.id}`),
+            ),
+          );
+        } else {
+          const have = (m) =>
+            bulkSelectedElements.some((b) => isSameElement(b, m));
+          setBulkSelectedElements([
+            ...bulkSelectedElements,
+            ...selection.filter((m) => !have(m)),
+          ]);
+        }
+        setDragging(notDragging);
+        return;
+      }
+      if (!isSelected) {
+        // Fresh selection: select the schema and all its members.
+        setBulkSelectedElements(selection);
+      }
+      // If the schema is already part of the selection, keep the whole selection
+      // intact so grabbing the box drags the entire multi-selection together.
       setDragging({
         id: element.id,
         type: ObjectType.SCHEMA,
@@ -768,8 +835,7 @@ export default function Canvas() {
         affected.forEach((sid) => {
           const s = schemas.find((sc) => sc.id === sid);
           const storedBox = getSchemaBox(s, tables, settings, relationships);
-          const derived = getSchemaRect(sid, finalTables, settings, relationships);
-          const grown = unionRect(storedBox, derived);
+          const grown = growSchemaBox(s, finalTables, settings, relationships);
           if (!grown) return;
           const from = storedBox ?? { ...grown };
           if (
@@ -807,6 +873,7 @@ export default function Canvas() {
         {
           action: Action.MOVE,
           bulk: true,
+          bulkKind: "move",
           message: t("bulk_update"),
           elements,
           ...(schemaBoxes.length ? { schemaBoxes } : {}),
@@ -828,17 +895,48 @@ export default function Canvas() {
       schemaBoxes.forEach(({ sid, redo }) => updateSchema(sid, redo));
     }
 
+    // Plain click (no drag) on an element that's part of a multi-selection
+    // collapses the selection to just that element — the conventional "click to
+    // isolate" behavior. (A drag keeps the whole group; see the didDrag block.)
+    // A schema collapses to itself + its members.
+    if (
+      !didDrag() &&
+      dragging.type !== ObjectType.NONE &&
+      dragging.id !== -1 &&
+      bulkSelectedElements.length > 1
+    ) {
+      if (dragging.type === ObjectType.SCHEMA) {
+        const schema = schemas.find((s) => s.id === dragging.id);
+        const selection = schema ? buildSchemaSelection(schema) : [];
+        if (selection.length) setBulkSelectedElements(selection);
+      } else {
+        const src =
+          dragging.type === ObjectType.TABLE
+            ? tables
+            : dragging.type === ObjectType.AREA
+              ? areas
+              : notes;
+        const el = src.find((it) => it.id === dragging.id);
+        if (el) {
+          setBulkSelectedElements([
+            {
+              id: el.id,
+              type: dragging.type,
+              currentCoords: { x: el.x, y: el.y },
+              initialCoords: { x: el.x, y: el.y },
+            },
+          ]);
+        }
+      }
+    }
+
     if (dropTargetSchemaIds.length > 0) setDropTargetSchemaIds([]);
     if (exitSchemaIds.length > 0) setExitSchemaIds([]);
 
-    // Grabbing a schema temporarily puts all its member tables in the bulk
-    // selection (so the group moves together). Clear it on pointer-up — whether
-    // or not a drag happened — so individual member tables stay independently
-    // draggable afterward. The schema itself stays the selected element, and a
-    // marquee multi-select (selectedElement !== SCHEMA) is left intact.
-    if (selectedElement.element === ObjectType.SCHEMA) {
-      setBulkSelectedElements([]);
-    }
+    // Selecting a schema keeps the schema + its member tables in the bulk
+    // selection (they stay highlighted and move/copy/delete as a group). The
+    // selection is reset normally by clicking a single element or marqueeing
+    // elsewhere — so we no longer clear it here on pointer-up.
 
     if (bulkSelectRect.show) {
       setBulkSelectRect((prev) => ({
